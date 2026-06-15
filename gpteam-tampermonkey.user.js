@@ -220,8 +220,87 @@
                 });
             });
         }
+    }
 
-        // 查询账户额度
+    // ==================== Auth 页面标记功能 ====================
+    function initAuthPageMarker() {
+        // 添加标记样式
+        GM_addStyle(`
+            .last-copied-email-row {
+                border: 3px solid #ffc107 !important;
+                border-radius: 4px;
+            }
+        `);
+
+        let isMarked = false;
+        let intervalId = null;
+
+        // 定时检测并标记
+        function markLastCopiedEmail() {
+            if (isMarked) {
+                if (intervalId) {
+                    clearInterval(intervalId);
+                }
+                return;
+            }
+
+            const lastCopiedEmail = GM_getValue('last_copied_email', '');
+            if (!lastCopiedEmail) {
+                return;
+            }
+
+            // 移除之前的标记
+            document.querySelectorAll('.last-copied-email-row').forEach(el => {
+                el.classList.remove('last-copied-email-row');
+            });
+
+            // 查找包含该邮箱的元素
+            const emailRegex = new RegExp(lastCopiedEmail.replace(/[.*+?^$()|[\]\\]/g, '\\$&'), 'i');
+            let found = false;
+
+            document.querySelectorAll('*').forEach(el => {
+                if (el.children.length === 0 && el.textContent.includes('@')) {
+                    if (emailRegex.test(el.textContent)) {
+                        const row = el.closest('tr, div[role="row"], li, [class*="row"], [class*="item"]');
+                        if (row && !row.classList.contains('last-copied-email-row')) {
+                            row.classList.add('last-copied-email-row');
+                            found = true;
+                            isMarked = true;
+                        }
+                    }
+                }
+            });
+        }
+
+        // 初始标记
+        setTimeout(markLastCopiedEmail, 1000);
+
+        // 每 1 秒检测一次，找到后自动停止
+        intervalId = setInterval(markLastCopiedEmail, 1000);
+    }
+
+    // ==================== Members 页面管理面板 ====================
+
+    // 工具函数：根据百分比获取颜色
+    function getQuotaColor(percentage) {
+        return percentage > 70 ? '#10b981' : percentage > 30 ? '#f59e0b' : '#ef4444';
+    }
+
+    // 工具函数：计算重置倒计时文本
+    function getResetText(resetTime) {
+        const now = Math.floor(Date.now() / 1000);
+        if (resetTime > now) {
+            const diffSeconds = resetTime - now;
+            const hours = Math.floor(diffSeconds / 3600);
+            const minutes = Math.floor((diffSeconds % 3600) / 60);
+            return ` (${hours}h${minutes}m)`;
+        } else if (resetTime > 0) {
+            return ' (已重置)';
+        }
+        return '';
+    }
+
+    // 样式定义
     GM_addStyle(`
         #account-panel {
             position: fixed;
