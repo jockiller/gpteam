@@ -1527,13 +1527,14 @@
             }
         }
 
-        clickInviteButton(email) {
-            // 查找"邀请成员"按钮
-            const inviteBtn = Array.from(document.querySelectorAll('button'))
-                .find(btn => {
-                    const text = btn.textContent.trim();
-                    return text === '邀请成员' || text === 'Invite member';
-                });
+        async clickInviteButton(email) {
+            const inviteBtn = await this.waitForElement(() =>
+                Array.from(document.querySelectorAll('button'))
+                    .find(btn => {
+                        const text = btn.textContent.trim();
+                        return text === '邀请成员' || text === 'Invite member';
+                    })
+            );
 
             if (!inviteBtn) {
                 CustomModal.alert('邀请失败', '页面上未找到"邀请成员"按钮', 'warning');
@@ -1542,150 +1543,120 @@
 
             inviteBtn.click();
 
-            // 等待弹窗出现，填充邮箱
-            setTimeout(() => {
-                const emailInput = document.querySelector('input#email[type="email"]');
-                if (!emailInput) {
-                    CustomModal.alert('邀请失败', '未找到邮箱输入框', 'warning');
+            const emailInput = await this.waitForElement(() =>
+                document.querySelector('input#email[type="email"]')
+            );
+
+            if (!emailInput) {
+                CustomModal.alert('邀请失败', '未找到邮箱输入框', 'warning');
+                return;
+            }
+
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            nativeInputValueSetter.call(emailInput, email);
+            emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+            emailInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+            const sendBtn = await this.waitForElement(() =>
+                Array.from(document.querySelectorAll('button'))
+                    .filter(btn => !btn.closest('#account-panel'))
+                    .find(btn => {
+                        const text = btn.textContent.trim();
+                        return text === '发送邀请' || text === 'Send invite' || text.includes('发送') || text.includes('Send');
+                    })
+            );
+
+            if (sendBtn) {
+                sendBtn.click();
+
+                const dialogGone = await this.waitUntilGone(() =>
+                    document.querySelector('input#email[type="email"]')
+                , 20, 1000);
+
+                if (!dialogGone) {
+                    CustomModal.alert('邀请超时', '邀请弹窗未关闭，请手动确认邀请结果后再授权', 'warning');
                     return;
                 }
 
-                // React 受控组件需要设置 nativeValue
-                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                nativeInputValueSetter.call(emailInput, email);
-
-                // 触发 React 事件
-                const inputEvent = new Event('input', { bubbles: true });
-                emailInput.dispatchEvent(inputEvent);
-
-                const changeEvent = new Event('change', { bubbles: true });
-                emailInput.dispatchEvent(changeEvent);
-
-                // 等待一下，自动点击发送按钮
-                setTimeout(() => {
-                    // 排除我们自己面板的按钮
-                    const sendBtn = Array.from(document.querySelectorAll('button'))
-                        .filter(btn => !btn.closest('#account-panel'))
-                        .find(btn => {
-                            const text = btn.textContent.trim();
-                            return text === '发送邀请' || text === 'Send invite' || text.includes('发送') || text.includes('Send');
-                        });
-
-                    if (sendBtn) {
-                        sendBtn.click();
-
-                        // 邀请成功，1秒后同步状态，然后自动触发授权
-                        setTimeout(() => {
-                            this.syncStatus();
-
-                            // 自动触发授权操作
-                            setTimeout(() => {
-                                this.handleOAuth(email);
-                            }, 1000);
-                        }, 1000);
-                    }
-                }, 800);
-            }, 800);
+                this.syncStatus();
+                await this.sleep(1000);
+                this.handleOAuth(email);
+            }
         }
 
-        clickMenuAndRemoveByEmail(email) {
-            // 找到包含指定邮箱的元素
-            const emailCell = Array.from(document.querySelectorAll('*'))
-                .find(el => el.textContent.trim() === email);
+        async clickMenuAndRemoveByEmail(email) {
+            const emailCell = await this.waitForElement(() =>
+                Array.from(document.querySelectorAll('*'))
+                    .find(el => el.textContent.trim() === email)
+            );
 
             if (!emailCell) {
                 CustomModal.alert('移除失败', '页面上未找到该邮箱，请确保在用户tab', 'warning');
                 return;
             }
 
-            // 找到该行
             const row = emailCell.closest('tr') || emailCell.closest('.member-row');
-
             if (!row) {
                 CustomModal.alert('移除失败', '未找到邮箱所在行', 'warning');
                 return;
             }
 
-            // 查找按钮
-            let button = row.querySelector('button[aria-haspopup="menu"]');
-            if (!button) {
-                button = row.querySelector('.ellipsis, .more-options, button');
-            }
+            const button = await this.waitForElement(() => {
+                let btn = row.querySelector('button[aria-haspopup="menu"]');
+                if (!btn) btn = row.querySelector('.ellipsis, .more-options, button');
+                return btn;
+            });
 
             if (!button) {
                 CustomModal.alert('移除失败', '未找到菜单按钮', 'warning');
                 return;
             }
 
-            // 点击按钮，触发菜单
             const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
             ['pointerdown','mousedown','mouseup','click'].forEach(type => {
-                const event = new MouseEvent(type, {
-                    bubbles: true,
-                    cancelable: true,
-                    view: win
-                });
-                button.dispatchEvent(event);
+                button.dispatchEvent(new MouseEvent(type, {
+                    bubbles: true, cancelable: true, view: win
+                }));
             });
 
-            // 等待菜单出现并点击"移除成员"
-            let elapsed = 0;
-            const interval = setInterval(() => {
-                elapsed += 500;
+            const removeBtn = await this.waitForElement(() => {
                 const menu = document.querySelector('div[role="menu"], div[aria-expanded="true"], body > div:nth-of-type(6) div');
-                if (menu) {
-                    const removeBtn = Array.from(menu.querySelectorAll('div[role="menuitem"], button, div'))
-                        .find(el => {
-                            const text = el.textContent.trim();
-                            return text === '移除成员' || text === 'Remove member';
-                        });
-
-                    if (removeBtn) {
-                        // 如果匹配到的是外层 group，找到内层的 menuitem
-                        let actualBtn = removeBtn;
-                        if (removeBtn.getAttribute('role') === 'group') {
-                            actualBtn = removeBtn.querySelector('div[role="menuitem"]');
-                        }
-
-                        if (!actualBtn) {
-                            return;
-                        }
-
-                        const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-                        const clickEvent = new MouseEvent('click', {
-                            bubbles: true,
-                            cancelable: true,
-                            view: win
-                        });
-                        actualBtn.dispatchEvent(clickEvent);
-                        clearInterval(interval);
-
-                        // 等待确认对话框并点击删除按钮
-                        setTimeout(() => {
-                            // 排除我们自己面板内的按钮
-                            const confirmBtn = Array.from(document.querySelectorAll('button.btn-danger, button'))
-                                .filter(btn => !btn.closest('#account-panel'))
-                                .find(btn => {
-                                    const text = btn.textContent.trim();
-                                    return text === '删除' || text === 'Delete' || text === '移除' || text === 'Remove';
-                                });
-                            if (confirmBtn) {
-                                confirmBtn.click();
-
-                                // 移除成功，1秒后同步状态
-                                setTimeout(() => {
-                                    this.syncStatus();
-                                }, 1000);
-                            }
-                        }, 500);
-                    }
+                if (!menu) return null;
+                const item = Array.from(menu.querySelectorAll('div[role="menuitem"], button, div'))
+                    .find(el => {
+                        const text = el.textContent.trim();
+                        return text === '移除成员' || text === 'Remove member';
+                    });
+                if (!item) return null;
+                if (item.getAttribute('role') === 'group') {
+                    return item.querySelector('div[role="menuitem"]') || item;
                 }
+                return item;
+            }, 4, 500);
 
-                if (elapsed >= 5000) {
-                    CustomModal.alert('移除失败', '未能找到移除按钮，操作超时', 'warning');
-                    clearInterval(interval);
-                }
-            }, 500);
+            if (!removeBtn) {
+                CustomModal.alert('移除失败', '未能找到移除按钮，操作超时', 'warning');
+                return;
+            }
+
+            removeBtn.dispatchEvent(new MouseEvent('click', {
+                bubbles: true, cancelable: true, view: win
+            }));
+
+            const confirmBtn = await this.waitForElement(() =>
+                Array.from(document.querySelectorAll('button.btn-danger, button'))
+                    .filter(btn => !btn.closest('#account-panel'))
+                    .find(btn => {
+                        const text = btn.textContent.trim();
+                        return text === '删除' || text === 'Delete' || text === '移除' || text === 'Remove';
+                    })
+            );
+
+            if (confirmBtn) {
+                confirmBtn.click();
+                await this.sleep(1000);
+                this.syncStatus();
+            }
         }
 
         async handleCopy(email) {
@@ -1730,6 +1701,24 @@
 
         sleep(ms) {
             return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        async waitForElement(finder, retries = 2, interval = 800) {
+            for (let i = 0; i <= retries; i++) {
+                const el = finder();
+                if (el) return el;
+                if (i < retries) await this.sleep(interval);
+            }
+            return null;
+        }
+
+        async waitUntilGone(finder, retries = 10, interval = 1000) {
+            for (let i = 0; i < retries; i++) {
+                await this.sleep(interval);
+                const el = finder();
+                if (!el) return true;
+            }
+            return false;
         }
 
         fillInviteInput() {
