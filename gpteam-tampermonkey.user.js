@@ -1285,6 +1285,131 @@
         }
     }
 
+    function decodeJwtPayloadStandalone(token) {
+        if (!token) return null;
+        const parts = token.split('.');
+        if (parts.length < 2) return null;
+        try {
+            const payload = parts[1];
+            const padded = payload + '='.repeat((4 - (payload.length % 4)) % 4);
+            const decoded = atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
+            return JSON.parse(decoded);
+        } catch {
+            return null;
+        }
+    }
+
+    function resolveAuthPayloadFromTokens(tokens) {
+        const p = decodeJwtPayloadStandalone(tokens.id_token);
+        return (p && typeof p['https://api.openai.com/auth'] === 'object')
+            ? p['https://api.openai.com/auth']
+            : null;
+    }
+
+    function resolveAccountIdFromAccount(account) {
+        const auth = resolveAuthPayloadFromTokens(account.codexTokens);
+        return (auth && (auth.chatgpt_account_id || auth.account_id)) || null;
+    }
+
+    function resolveUserIdFromAccount(account) {
+        const idPayload = decodeJwtPayloadStandalone(account.codexTokens.id_token);
+        const auth = resolveAuthPayloadFromTokens(account.codexTokens);
+        return (auth && (auth.chatgpt_user_id || auth.user_id)) || (idPayload && idPayload.sub) || null;
+    }
+
+    function resolveOrganizationIdFromAccount(account) {
+        const auth = resolveAuthPayloadFromTokens(account.codexTokens);
+        return (auth && auth.organization_id) || null;
+    }
+
+    function resolvePlanTypeFromAccount(account) {
+        const auth = resolveAuthPayloadFromTokens(account.codexTokens);
+        return (auth && auth.chatgpt_plan_type) || null;
+    }
+
+    function resolveAccessTokenExpiryFromAccount(account) {
+        const accessPayload = decodeJwtPayloadStandalone(account.codexTokens.access_token);
+        const idPayload = decodeJwtPayloadStandalone(account.codexTokens.id_token);
+        const exp = (accessPayload && accessPayload.exp) || (idPayload && idPayload.exp);
+        if (!exp) return '';
+        return new Date(exp * 1000).toISOString();
+    }
+
+    function resolveSubscriptionExpiresAtFromAccount(account) {
+        const auth = resolveAuthPayloadFromTokens(account.codexTokens);
+        if (!auth) return undefined;
+        const raw = auth.chatgpt_subscription_active_until;
+        if (raw == null) return undefined;
+        const millis = raw > 1e12 ? raw : raw * 1000;
+        return new Date(millis).toISOString();
+    }
+
+    function toPortableTokenStorage(account) {
+        return {
+            id_token: account.codexTokens.id_token || '',
+            access_token: account.codexTokens.access_token || '',
+            refresh_token: account.codexTokens.refresh_token || '',
+            account_id: resolveAccountIdFromAccount(account) || '',
+            last_refresh: account.codexTokens.authorized_at || new Date().toISOString(),
+            email: account.email || '',
+            type: 'codex',
+            expired: resolveAccessTokenExpiryFromAccount(account) || '',
+        };
+    }
+
+    function formatExportData(accounts, format) {
+        if (format === 'cockpit_tools') {
+            return JSON.stringify(accounts.map(toPortableTokenStorage), null, 2);
+        }
+
+        if (format === 'sub2api') {
+            const payload = {
+                exported_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+                proxies: [],
+                accounts: accounts.map(account => {
+                    const credentials = { access_token: account.codexTokens.access_token };
+                    const expiresAt = resolveAccessTokenExpiryFromAccount(account);
+                    if (expiresAt) credentials.expires_at = expiresAt;
+                    if (account.codexTokens.refresh_token) credentials.refresh_token = account.codexTokens.refresh_token;
+                    if (account.codexTokens.id_token) credentials.id_token = account.codexTokens.id_token;
+                    if (account.email) credentials.email = account.email;
+                    const accountId = resolveAccountIdFromAccount(account);
+                    if (accountId) credentials.chatgpt_account_id = accountId;
+                    const userId = resolveUserIdFromAccount(account);
+                    if (userId) credentials.chatgpt_user_id = userId;
+                    const orgId = resolveOrganizationIdFromAccount(account);
+                    if (orgId) credentials.organization_id = orgId;
+                    const planType = resolvePlanTypeFromAccount(account);
+                    if (planType) credentials.plan_type = planType;
+                    const subExpires = resolveSubscriptionExpiresAtFromAccount(account);
+                    if (subExpires) credentials.subscription_expires_at = subExpires;
+                    return {
+                        name: account.email,
+                        platform: 'openai',
+                        type: 'oauth',
+                        credentials,
+                        concurrency: 0,
+                        priority: 0,
+                    };
+                }),
+                type: 'sub2api-data',
+                version: 1,
+            };
+            return JSON.stringify(payload, null, 2);
+        }
+
+        // cpa format
+        const result = accounts.map(toPortableTokenStorage);
+        return JSON.stringify(result.length === 1 ? result[0] : result, null, 2);
+    }
+
+    function getExportFileName(format) {
+        const date = new Date().toISOString().slice(0, 10);
+        const base = `codex-tokens-${date}`;
+        if (format === 'cockpit_tools') return `${base}.json`;
+        return `${base}_${format}.json`;
+    }
+
     // UI 管理
     class PanelUI {
         constructor(manager, scanner) {
@@ -2414,7 +2539,7 @@
             }
         }
 
-        // 导出Token（参考cockpit的exportCodexAccounts逻辑）
+        // 导出Token（支持三种格式：cockpit_tools / sub2api / cpa）
         async exportTokens() {
             const accounts = this.manager.getAll().filter(a =>
                 this.selectedEmails.has(a.email) &&
@@ -2427,37 +2552,20 @@
                 return;
             }
 
-            // 构建导出数据，参考cockpit的格式
-            const exportData = accounts.map(account => ({
-                email: account.email,
-                account_id: null,  // 可以从id_token中解析
-                user_id: null,
-                organization_id: null,
-                tokens: {
-                    id_token: account.codexTokens.id_token,
-                    access_token: account.codexTokens.access_token,
-                    refresh_token: account.codexTokens.refresh_token || null
-                },
-                authorized_at: account.codexTokens.authorized_at,
-                status: account.codexTokens.status,
-                quota: account.codexTokens.quota || null,
-                quota_updated_at: account.codexTokens.quota_updated_at || null,
-                note: account.note || '',
-                exported_at: new Date().toISOString()
-            }));
+            const choice = await this.showExportChoiceDialog(accounts.length);
 
-            const jsonStr = JSON.stringify(exportData, null, 2);
+            if (!choice) return;
 
-            // 弹窗询问：复制到剪贴板 或 下载文件
-            const action = await this.showExportChoiceDialog(accounts.length);
+            const { action, format } = choice;
+            const jsonStr = formatExportData(accounts, format);
+            const formatLabels = { cockpit_tools: 'Cockpit Tools', sub2api: 'sub2api', cpa: 'cpa' };
+            const formatLabel = formatLabels[format] || format;
 
             if (action === 'copy') {
-                // 复制到剪贴板
                 try {
                     await navigator.clipboard.writeText(jsonStr);
-                    this.showCustomAlert('复制成功', `已将 ${accounts.length} 个账户的Token复制到剪贴板！`, 'success');
+                    this.showCustomAlert('复制成功', `已将 ${accounts.length} 个账户以 ${formatLabel} 格式复制到剪贴板！`, 'success');
                 } catch (err) {
-                    // 备用方案：使用旧方法
                     const textarea = document.createElement('textarea');
                     textarea.value = jsonStr;
                     textarea.style.position = 'fixed';
@@ -2466,27 +2574,25 @@
                     textarea.select();
                     document.execCommand('copy');
                     document.body.removeChild(textarea);
-                    this.showCustomAlert('复制成功', `已将 ${accounts.length} 个账户的Token复制到剪贴板！`, 'success');
+                    this.showCustomAlert('复制成功', `已将 ${accounts.length} 个账户以 ${formatLabel} 格式复制到剪贴板！`, 'success');
                 }
             } else if (action === 'download') {
-                // 下载文件
                 const blob = new Blob([jsonStr], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
 
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `chatgpt-team-tokens-${new Date().toISOString().slice(0, 10)}.json`;
+                a.download = getExportFileName(format);
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
 
-                this.showCustomAlert('下载成功', `成功下载 ${accounts.length} 个账户的Token！`, 'success');
+                this.showCustomAlert('下载成功', `已以 ${formatLabel} 格式下载 ${accounts.length} 个账户！`, 'success');
             }
-            // 如果action为null（用户取消），则不执行任何操作
         }
 
-        // 显示导出选择对话框：复制到剪贴板 或 下载文件
+        // 显示导出选择对话框：选择格式 + 导出方式（复制/下载）
         showExportChoiceDialog(count) {
             return new Promise((resolve) => {
                 const overlay = document.createElement('div');
@@ -2497,8 +2603,23 @@
 
                 dialog.innerHTML = `
                     <div class="modal-title">导出 Token</div>
-                    <div class="modal-message">已选中 ${count} 个账户，请选择导出方式：</div>
-                    <div class="modal-buttons" style="display: flex; gap: 10px; justify-content: center; margin-top: 20px;">
+                    <div class="modal-message">已选中 ${count} 个账户</div>
+                    <div style="margin-bottom: 16px;">
+                        <div style="font-size: 13px; font-weight: 600; color: #333; margin-bottom: 8px;">导出格式</div>
+                        <div style="display: flex; gap: 8px;">
+                            <label style="flex: 1; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border: 2px solid #667eea; border-radius: 8px; cursor: pointer; background: #eef2ff; font-size: 12px; font-weight: 600; color: #333;">
+                                <input type="radio" name="export-format" value="cockpit_tools" checked style="accent-color: #667eea;"> Cockpit
+                            </label>
+                            <label style="flex: 1; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border: 2px solid #e0e0e0; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600; color: #333;">
+                                <input type="radio" name="export-format" value="sub2api" style="accent-color: #667eea;"> sub2api
+                            </label>
+                            <label style="flex: 1; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border: 2px solid #e0e0e0; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600; color: #333;">
+                                <input type="radio" name="export-format" value="cpa" style="accent-color: #667eea;"> cpa
+                            </label>
+                        </div>
+                    </div>
+                    <div style="font-size: 13px; font-weight: 600; color: #333; margin-bottom: 8px;">导出方式</div>
+                    <div class="modal-buttons" style="display: flex; gap: 10px; justify-content: center;">
                         <button class="modal-btn" id="copy-btn" style="background: #10b981; color: white; flex: 1;">复制</button>
                         <button class="modal-btn" id="download-btn" style="background: #3b82f6; color: white; flex: 1;">下载</button>
                     </div>
@@ -2510,6 +2631,24 @@
                 overlay.appendChild(dialog);
                 document.body.appendChild(overlay);
 
+                const radios = dialog.querySelectorAll('input[name="export-format"]');
+                const labels = dialog.querySelectorAll('label');
+
+                radios.forEach(radio => {
+                    radio.addEventListener('change', () => {
+                        labels.forEach(label => {
+                            const r = label.querySelector('input[type="radio"]');
+                            label.style.borderColor = r.checked ? '#667eea' : '#e0e0e0';
+                            label.style.background = r.checked ? '#eef2ff' : 'transparent';
+                        });
+                    });
+                });
+
+                const getSelectedFormat = () => {
+                    const checked = dialog.querySelector('input[name="export-format"]:checked');
+                    return checked ? checked.value : 'cockpit_tools';
+                };
+
                 const copyBtn = dialog.querySelector('#copy-btn');
                 const downloadBtn = dialog.querySelector('#download-btn');
                 const cancelBtn = dialog.querySelector('#cancel-btn');
@@ -2519,13 +2658,15 @@
                 };
 
                 copyBtn.onclick = () => {
+                    const format = getSelectedFormat();
                     cleanup();
-                    resolve('copy');
+                    resolve({ action: 'copy', format });
                 };
 
                 downloadBtn.onclick = () => {
+                    const format = getSelectedFormat();
                     cleanup();
-                    resolve('download');
+                    resolve({ action: 'download', format });
                 };
 
                 cancelBtn.onclick = () => {
