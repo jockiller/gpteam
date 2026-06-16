@@ -22,7 +22,7 @@
     'use strict';
 
     // 是否启用上传到 Cockpit 功能（控制上传按钮显示及 OAuth 授权后自动上传）
-    const ENABLE_UPLOAD = false;
+    const ENABLE_UPLOAD = true;
 
     // 检测当前页面
     const isAuthPage = window.location.hostname === 'auth.openai.com';
@@ -1466,7 +1466,7 @@
 
             this.panel.innerHTML = `
                 <div class="panel-header">
-                    <div class="panel-title">GPTeam v5.3.0</div>
+                    <div class="panel-title">GPTeam v5.3.1</div>
                     <button class="panel-toggle" id="toggle-btn">−</button>
                 </div>
                 <div class="panel-body">
