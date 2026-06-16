@@ -2277,6 +2277,11 @@
                     if (hasToken && tokenStatus === 'expired') {
                         statusSpans.push(`<span style="color: #ef4444;">✗ 已失效</span>`);
                     }
+                    const isRecentlyRemoved = account.status !== 'joined' && account.lastGptSeatAt &&
+                        (Date.now() - new Date(account.lastGptSeatAt).getTime()) < 10 * 60 * 1000;
+                    if (isRecentlyRemoved) {
+                        statusSpans.push(`<span style="color: #f59e0b; background: #fef3c7;">刚移出</span>`);
+                    }
                     metaLine.innerHTML = statusSpans.join('');
                 }
             });
@@ -2291,32 +2296,27 @@
             const tokens = account.codexTokens;
             const now = Math.floor(Date.now() / 1000);
 
-            // 如果已失效但过了重置时间，显示100%和"已重置"
+            // 如果已失效，对每个窗口独立判断是否已过重置时间
             if (tokens.status === 'expired' && tokens.quota) {
                 const hourlyReset = tokens.quota.hourly_reset_time || 0;
                 const weeklyReset = tokens.quota.weekly_reset_time || 0;
-                if (now > hourlyReset && now > weeklyReset) {
-                    return {
-                        hourly: { text: '5h: 100%', color: '#10b981', resetText: ' (已重置)' },
-                        weekly: { text: '周: 100%', color: '#10b981', resetText: ' (已重置)' },
-                        status: 'expired'
-                    };
-                }
 
-                // 如果已失效但还没到重置时间，显示额度和重置倒计时
-                const hourlyPct = tokens.quota.hourly_percentage || 0;
-                const weeklyPct = tokens.quota.weekly_percentage || 0;
+                const hourlyHasReset = now > hourlyReset;
+                const weeklyHasReset = now > weeklyReset;
+
+                const hourlyPct = hourlyHasReset ? 100 : (tokens.quota.hourly_percentage || 0);
+                const weeklyPct = weeklyHasReset ? 100 : (tokens.quota.weekly_percentage || 0);
 
                 return {
                     hourly: {
                         text: `5h: ${Math.round(hourlyPct)}%`,
                         color: getQuotaColor(hourlyPct),
-                        resetText: getResetText(hourlyReset)
+                        resetText: hourlyHasReset ? ' (已重置)' : getResetText(hourlyReset)
                     },
                     weekly: {
                         text: `周: ${Math.round(weeklyPct)}%`,
                         color: getQuotaColor(weeklyPct),
-                        resetText: getResetText(weeklyReset)
+                        resetText: weeklyHasReset ? ' (已重置)' : getResetText(weeklyReset)
                     },
                     status: 'expired'
                 };
@@ -2609,32 +2609,27 @@
                 const tokens = account.codexTokens;
                 const now = Math.floor(Date.now() / 1000);
 
-                // 如果已失效但过了重置时间，显示100%和"已重置"
+                // 如果已失效，对每个窗口独立判断是否已过重置时间
                 if (tokens.status === 'expired' && tokens.quota) {
                     const hourlyReset = tokens.quota.hourly_reset_time || 0;
                     const weeklyReset = tokens.quota.weekly_reset_time || 0;
-                    if (now > hourlyReset && now > weeklyReset) {
-                        return {
-                            hourly: { text: '5h: 100%', color: '#10b981', resetText: ' (已重置)' },
-                            weekly: { text: '周: 100%', color: '#10b981', resetText: ' (已重置)' },
-                            status: 'expired'
-                        };
-                    }
 
-                    // 如果已失效但还没到重置时间，显示额度和重置倒计时
-                    const hourlyPct = tokens.quota.hourly_percentage || 0;
-                    const weeklyPct = tokens.quota.weekly_percentage || 0;
+                    const hourlyHasReset = now > hourlyReset;
+                    const weeklyHasReset = now > weeklyReset;
+
+                    const hourlyPct = hourlyHasReset ? 100 : (tokens.quota.hourly_percentage || 0);
+                    const weeklyPct = weeklyHasReset ? 100 : (tokens.quota.weekly_percentage || 0);
 
                     return {
                         hourly: {
                             text: `5h: ${Math.round(hourlyPct)}%`,
                             color: getQuotaColor(hourlyPct),
-                            resetText: getResetText(hourlyReset)
+                            resetText: hourlyHasReset ? ' (已重置)' : getResetText(hourlyReset)
                         },
                         weekly: {
                             text: `周: ${Math.round(weeklyPct)}%`,
                             color: getQuotaColor(weeklyPct),
-                            resetText: getResetText(weeklyReset)
+                            resetText: weeklyHasReset ? ' (已重置)' : getResetText(weeklyReset)
                         },
                         status: 'expired'
                     };
@@ -2672,6 +2667,8 @@
                 const hasToken = account.codexTokens && account.codexTokens.access_token;
                 const tokenStatus = hasToken ? account.codexTokens.status : null;
                 const quotaDisplay = getQuotaDisplay(account);
+                const isRecentlyRemoved = !isJoined && account.lastGptSeatAt &&
+                    (Date.now() - new Date(account.lastGptSeatAt).getTime()) < 10 * 60 * 1000;
 
                 // 检查是否可以移出（只有所有者不能移出）
                 const isOwner = account.role === '所有者' || account.role === 'Owner';
@@ -2699,6 +2696,7 @@
                                         ${account.seatType ? `<span>席位: ${account.seatType}</span>` : ''}
                                         ${hasToken && tokenStatus === 'authorized' ? `<span style="color: #10b981;">✓ 已授权</span>` : ''}
                                         ${hasToken && tokenStatus === 'expired' ? `<span style="color: #ef4444;">✗ 已失效</span>` : ''}
+                                        ${isRecentlyRemoved ? `<span style="color: #f59e0b; background: #fef3c7;">刚移出</span>` : ''}
                                     </div>
                                     ${quotaDisplay ? `<div class="email-quota-line">
                                         ${quotaDisplay.hourly ? `<span style="color: ${quotaDisplay.hourly.color};">${quotaDisplay.hourly.text}${quotaDisplay.hourly.resetText}</span>` : ''}
