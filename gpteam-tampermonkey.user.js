@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GPTeam
 // @namespace    http://tampermonkey.net/
-// @version      5.3.0
+// @version      5.3.1
 // @description  功能增强版 - Codex OAuth 授权、Token 管理、额度查询与导出、智能刷新、邀请后自动授权、简化界面、额度详情、支持所有者管理、保护关键账户、点击邮箱复制、邀请成员、角色过滤、紧凑布局、一键移出成员、全站注入仅members显示、tab检测、批量添加、搜索过滤、批量删除、备注功能、自动同步、跨页面标记
 // @author       xcg
 // @match        https://chatgpt.com/*
@@ -14,11 +14,15 @@
 // @grant        unsafeWindow
 // @connect      auth.openai.com
 // @connect      codex.openai.com
+// @connect      localhost
 // @run-at       document-end
 // ==/UserScript==
 
 (function() {
     'use strict';
+
+    // 是否启用上传到 Cockpit 功能（控制上传按钮显示及 OAuth 授权后自动上传）
+    const ENABLE_UPLOAD = false;
 
     // 检测当前页面
     const isAuthPage = window.location.hostname === 'auth.openai.com';
@@ -1339,9 +1343,11 @@
         const auth = resolveAuthPayloadFromTokens(account.codexTokens);
         if (!auth) return undefined;
         const raw = auth.chatgpt_subscription_active_until;
-        if (raw == null) return undefined;
+        if (raw == null || !isFinite(raw)) return undefined;
         const millis = raw > 1e12 ? raw : raw * 1000;
-        return new Date(millis).toISOString();
+        const d = new Date(millis);
+        if (isNaN(d.getTime())) return undefined;
+        return d.toISOString();
     }
 
     function toPortableTokenStorage(account) {
@@ -1695,8 +1701,8 @@
                 sendBtn.click();
 
                 const dialogGone = await this.waitUntilGone(() =>
-                    document.querySelector('input#email[type="email"]')
-                , 20, 1000);
+                        document.querySelector('input#email[type="email"]')
+                    , 20, 1000);
 
                 if (!dialogGone) {
                     CustomModal.alert('邀请超时', '邀请弹窗未关闭，请手动确认邀请结果后再授权', 'warning');
@@ -1981,16 +1987,44 @@
                             });
 
                             console.log('授权成功:', email);
-                            this.showCustomAlert(`授权成功！\n\n邮箱：${email}`, '即将自动刷新');
+
+                            // 构建完整的导出格式
+                            const exportFormat = [{
+                                email: email,
+                                account_id: null,
+                                user_id: null,
+                                organization_id: null,
+                                tokens: {
+                                    id_token: result.tokens.id_token,
+                                    access_token: result.tokens.access_token,
+                                    refresh_token: result.tokens.refresh_token
+                                },
+                                authorized_at: result.tokens.authorized_at,
+                                status: 'authorized',
+                                quota: null,
+                                quota_updated_at: null,
+                                note: '',
+                                exported_at: new Date().toISOString()
+                            }];
+
+                            // 调用 Cockpit API 上传 token
+                            if (ENABLE_UPLOAD) {
+                                this.uploadTokenToCockpit(exportFormat)
+                                    .then(() => {
+                                        console.log('[Cockpit] Token已上传到Cockpit');
+                                    })
+                                    .catch(err => {
+                                        console.warn('[Cockpit] 上传Token到Cockpit失败，但不影响授权:', err.message);
+                                    });
+                            }
+
+                            this.showCustomAlert('授权成功', `邮箱：${email}\n\n点击确定后将刷新页面以识别新成员`, 'success', () => {
+                                window.location.reload();
+                            });
                             this.render();
 
                             // 立即刷新额度
                             this.refreshSingleQuota(email);
-
-                            // 授权成功后刷新页面，让网页识别新成员
-                            setTimeout(() => {
-                                window.location.reload();
-                            }, 2000); // 2秒后刷新，让用户看到成功提示
                         })
                         .catch(error => {
                             // 关闭加载
@@ -2119,7 +2153,7 @@
         }
 
         // 自定义提示框（支持标题）
-        showCustomAlert(title, message, type = 'info') {
+        showCustomAlert(title, message, type = 'info', onClose = null) {
             // 兼容旧调用方式：如果title包含换行或长度较长，且message是type类型，则交换参数
             if (typeof message === 'string' && ['success', 'error', 'info', 'warning'].includes(message) && title.length > 50) {
                 [title, message, type] = ['提示', title, message];
@@ -2153,6 +2187,7 @@
             const closeBtn = dialog.querySelector('#close-btn');
             closeBtn.onclick = () => {
                 document.body.removeChild(overlay);
+                if (onClose) onClose();
             };
         }
 
@@ -2177,6 +2212,45 @@
 
             document.body.appendChild(overlay);
             return overlay;
+        }
+
+        // 上传 Token 到 Cockpit API
+        uploadTokenToCockpit(tokenData) {
+            return new Promise((resolve, reject) => {
+                const cockpitApiUrl = 'http://localhost:19315/v1/cockpit/import-token';
+
+                // tokenData 应该是导出的完整JSON格式数组
+                const dataToSend = Array.isArray(tokenData) ? tokenData : [tokenData];
+
+                console.log('[Cockpit] 开始上传 Token，数据量:', dataToSend.length);
+
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: cockpitApiUrl,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    data: JSON.stringify(dataToSend),
+                    timeout: 30000,  // 30秒超时
+                    onload: (response) => {
+                        if (response.status === 200 || response.status === 201) {
+                            console.log('[Cockpit] Token上传成功:', response.responseText);
+                            resolve(response.responseText);
+                        } else {
+                            console.error('[Cockpit] Token上传失败:', response.status, response.responseText);
+                            reject(new Error(`HTTP ${response.status}: ${response.responseText}`));
+                        }
+                    },
+                    onerror: (error) => {
+                        console.error('[Cockpit] Token上传网络错误:', error);
+                        reject(new Error(`网络请求失败: ${error.error || 'Unknown error'}`));
+                    },
+                    ontimeout: () => {
+                        console.error('[Cockpit] Token上传超时');
+                        reject(new Error('请求超时，请检查 Cockpit 服务是否正常运行'));
+                    }
+                });
+            });
         }
 
         syncStatus() {
@@ -2556,6 +2630,34 @@
 
             if (!choice) return;
 
+            if (choice === 'upload') {
+                // 上传到 Cockpit
+                try {
+                    const exportData = accounts.map(a => ({
+                        email: a.email,
+                        account_id: resolveAccountIdFromAccount(a) || null,
+                        user_id: resolveUserIdFromAccount(a) || null,
+                        organization_id: resolveOrganizationIdFromAccount(a) || null,
+                        tokens: {
+                            id_token: a.codexTokens.id_token,
+                            access_token: a.codexTokens.access_token,
+                            refresh_token: a.codexTokens.refresh_token
+                        },
+                        authorized_at: a.codexTokens.authorized_at,
+                        status: a.codexTokens.status || 'authorized',
+                        quota: a.codexTokens.quota || null,
+                        quota_updated_at: a.codexTokens.quota_updated_at || null,
+                        note: a.note || '',
+                        exported_at: new Date().toISOString()
+                    }));
+                    await this.uploadTokenToCockpit(exportData);
+                    this.showCustomAlert('上传成功', `已将 ${accounts.length} 个账户的Token上传到Cockpit！`, 'success');
+                } catch (error) {
+                    this.showCustomAlert('上传失败', error.message, 'error');
+                }
+                return;
+            }
+
             const { action, format } = choice;
             const jsonStr = formatExportData(accounts, format);
             const formatLabels = { cockpit_tools: 'Cockpit Tools', sub2api: 'sub2api', cpa: 'cpa' };
@@ -2622,6 +2724,7 @@
                     <div class="modal-buttons" style="display: flex; gap: 10px; justify-content: center;">
                         <button class="modal-btn" id="copy-btn" style="background: #10b981; color: white; flex: 1;">复制</button>
                         <button class="modal-btn" id="download-btn" style="background: #3b82f6; color: white; flex: 1;">下载</button>
+                        ${ENABLE_UPLOAD ? '<button class="modal-btn" id="upload-btn" style="background: #8b5cf6; color: white; flex: 1;">上传</button>' : ''}
                     </div>
                     <div class="modal-buttons" style="margin-top: 10px;">
                         <button class="modal-btn modal-btn-cancel" id="cancel-btn" style="width: 100%;">取消</button>
@@ -2668,6 +2771,14 @@
                     cleanup();
                     resolve({ action: 'download', format });
                 };
+
+                if (ENABLE_UPLOAD) {
+                    const uploadBtn = dialog.querySelector('#upload-btn');
+                    uploadBtn.onclick = () => {
+                        cleanup();
+                        resolve('upload');
+                    };
+                }
 
                 cancelBtn.onclick = () => {
                     cleanup();
@@ -2813,10 +2924,10 @@
                                     <button class="btn-note" data-email="${account.email}" title="添加备注">📝</button>
                                     <button class="btn-oauth" data-email="${account.email}" style="background: #8b5cf6; color: white; padding: 3px 8px; border: none; border-radius: 4px; font-size: 10px; font-weight: 600; cursor: pointer; height: 24px;">授权</button>
                                     ${isJoined
-                                        ? (canRemove
-                                            ? `<button class="btn-remove" data-email="${account.email}">移出</button>`
-                                            : `<button class="btn-remove disabled" style="opacity: 0.5; cursor: not-allowed;" disabled>移出</button>`)
-                                        : `<button class="btn-invite" data-email="${account.email}">邀请</button>`}
+                    ? (canRemove
+                        ? `<button class="btn-remove" data-email="${account.email}">移出</button>`
+                        : `<button class="btn-remove disabled" style="opacity: 0.5; cursor: not-allowed;" disabled>移出</button>`)
+                    : `<button class="btn-invite" data-email="${account.email}">邀请</button>`}
                                 </div>
                             </div>
                             ${account.note ? `<div class="email-note">📝 ${account.note}</div>` : ''}
