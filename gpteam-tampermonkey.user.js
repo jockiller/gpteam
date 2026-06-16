@@ -21,7 +21,7 @@
 (function() {
     'use strict';
 
-    // 是否启用上传到 Cockpit 功能（控制上传按钮显示及 OAuth 授权后自动上传）原版cockpit，所以请不要开启这个功能
+    // 是否启用上传到 Cockpit 功能（控制上传按钮显示及 OAuth 授权后自动上传）。原版cockpit是不支持的，所以请不要开启这个功能
     const ENABLE_UPLOAD = true;
 
     // 检测当前页面
