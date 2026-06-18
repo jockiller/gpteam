@@ -49,7 +49,7 @@
     const unsafeWindow = window;
 
     // 是否启用上传到 Cockpit 功能（控制上传按钮显示及 OAuth 授权后自动上传）
-    const ENABLE_UPLOAD = true;
+    const ENABLE_UPLOAD = false;
 
     // 检测当前页面
     const isAuthPage = window.location.hostname === 'auth.openai.com';
