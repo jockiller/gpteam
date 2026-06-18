@@ -1,10 +1,13 @@
 # GPTeam - ChatGPT Team 管理增强工具
 
-![Version](https://img.shields.io/badge/version-5.3.0-blue.svg)
-![Tampermonkey](https://img.shields.io/badge/Tampermonkey-required-orange.svg)
+![Version](https://img.shields.io/badge/version-5.3.1-blue.svg)
+![Chrome Extension](https://img.shields.io/badge/Chrome%20Extension-recommended-brightgreen.svg)
+![Tampermonkey](https://img.shields.io/badge/Tampermonkey-compatible-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
-一个功能强大的 Tampermonkey 脚本，用于增强 ChatGPT Team 的成员管理、OAuth 授权、Token 管理和额度查询功能。
+一个功能强大的 ChatGPT Team 管理增强工具，用于增强成员管理、OAuth 授权、Token 管理和额度查询功能。
+
+推荐使用 **Chrome 插件版**：它比油猴版自动化程度更高，可以自动监听 `localhost:1455` OAuth 回调并完成 Token 交换，不需要手动复制粘贴回调 URL。
 
 ## 📸 界面预览
 
@@ -51,15 +54,29 @@
 ## 🚀 安装使用
 
 ### 前置要求
-1. 安装 [Tampermonkey](https://www.tampermonkey.net/) 浏览器扩展
+1. 推荐使用 Chrome 或 Edge 等 Chromium 浏览器
 2. 拥有 ChatGPT Team 管理员权限
 
-### 安装步骤
-1. 打开 Tampermonkey 管理面板
-2. 点击 "+" 创建新脚本
-3. 复制 `gpteam-tampermonkey.user.js` 的完整内容
-4. 粘贴到编辑器并保存
+### 推荐方式：Chrome 插件版
+1. 打开 `chrome://extensions`
+2. 开启右上角 **开发者模式**
+3. 点击 **加载已解压的扩展程序**
+4. 选择 `chrome-extension` 目录
 5. 访问 `https://chatgpt.com/admin/members` 即可看到管理面板
+
+插件版额外能力：
+- 自动打开 OAuth 小窗口
+- 自动监听 `http://localhost:1455/auth/callback` 回调
+- 自动完成 Token 交换，无需复制粘贴 URL
+- 插件 popup 提供只读账号面板，便于快速查看状态
+
+### 兼容方式：Tampermonkey 脚本
+1. 安装 [Tampermonkey](https://www.tampermonkey.net/) 浏览器扩展
+2. 打开 Tampermonkey 管理面板
+3. 点击 "+" 创建新脚本
+4. 复制 `gpteam-tampermonkey.user.js` 的完整内容
+5. 粘贴到编辑器并保存
+6. 访问 `https://chatgpt.com/admin/members` 即可看到管理面板
 
 ## 📖 使用指南
 
@@ -83,10 +100,8 @@
 #### OAuth 授权
 1. 点击邮箱旁的 **"授权"** 按钮
 2. 在弹出的授权窗口中登录对应账户并完成授权
-3. 授权后浏览器会自动跳转到 `localhost:1455`（该地址无法访问，这是正常的）
-4. 复制浏览器地址栏的**完整 URL**（格式：`http://localhost:1455/auth/callback?code=...&state=...`）
-5. 粘贴到脚本弹出的输入框中
-6. 脚本自动验证并完成 Token 交换
+3. Chrome 插件版会自动监听 `localhost:1455` 回调并完成 Token 交换
+4. Tampermonkey 版需要手动复制浏览器地址栏的完整回调 URL 并粘贴到脚本弹窗中
 
 #### 查询额度
 - **单个刷新**: 授权后自动查询
@@ -121,9 +136,10 @@
 
 ### 核心技术
 - **OAuth 2.0 PKCE**: 安全的授权码流程
-- **GM_xmlhttpRequest**: 跨域 API 请求
-- **GM_setValue/GM_getValue**: 持久化数据存储
-- **手动回调处理**: 用户粘贴回调 URL 完成授权流程
+- **Chrome Extension MV3**: 推荐版本使用 background service worker 监听 OAuth 回调
+- **chrome.storage.local / GM_setValue**: 持久化数据存储
+- **跨域请求代理**: 插件版由 background 发起请求，油猴版使用 GM_xmlhttpRequest
+- **自动回调处理**: 插件版自动捕获 `localhost:1455` 回调；油猴版保留手动回调输入
 
 ### 数据结构
 ```javascript
@@ -156,8 +172,8 @@
 ## 🛡️ 安全说明
 
 ### 数据安全
-- 所有数据存储在浏览器本地（Tampermonkey 存储）
-- Token 仅存储在本地，不会上传到任何服务器
+- 所有数据存储在浏览器本地（插件版使用 `chrome.storage.local`，油猴版使用 Tampermonkey 存储）
+- Token 默认保存在本地；如启用 Cockpit 上传功能，会上传到本机 `http://localhost:19315`
 - 支持邮箱匹配验证，防止授权错误账户
 
 ### 使用建议
@@ -173,7 +189,8 @@
 3. **Token 有效期**: Token 会过期，过期后需要重新授权
 4. **所有者保护**: 不能移出所有者角色的账户
 5. **页面刷新**: 授权成功后会自动刷新页面以识别新成员
-6. **浏览器兼容**: 建议使用 Chrome、Edge、Firefox 等现代浏览器
+6. **插件版限制**: popup 是只读面板，邀请、移出、授权等操作需要在 `https://chatgpt.com/admin/members` 页面执行
+7. **浏览器兼容**: 插件版建议使用 Chrome/Edge，油猴版可用于支持 Tampermonkey 的现代浏览器
 
 
 ## 🤝 贡献
