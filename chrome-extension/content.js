@@ -1925,6 +1925,9 @@
                     return;
                 }
 
+                // 保持油猴版体验：授权前复制邮箱，并让 auth.openai.com 页面标记对应账号行。
+                await this.handleCopy(email);
+
                 const codexOAuth = new CodexOAuthManager();
 
                 // 生成PKCE参数
