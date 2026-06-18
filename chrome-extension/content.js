@@ -18,7 +18,9 @@
 
     function GM_setValue(key, value) {
         gpteamStorageCache[key] = value;
-        chrome.storage.local.set({ [key]: value });
+        chrome.storage.local.set({ [key]: value }).catch(error => {
+            console.warn('[GPTeam Storage] 保存失败:', key, error);
+        });
     }
 
     chrome.storage.onChanged.addListener((changes, areaName) => {

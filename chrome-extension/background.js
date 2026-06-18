@@ -85,6 +85,46 @@ async function exchangeToken(code, codeVerifier, email) {
   };
 }
 
+async function refreshAccessToken(refreshToken, email) {
+  if (!refreshToken) {
+    throw new Error('missing_refresh_token');
+  }
+
+  const params = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+    client_id: CLIENT_ID
+  });
+
+  const response = await fetch(TOKEN_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: params.toString()
+  });
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    throw new Error(`refresh_token_failed HTTP ${response.status}: ${responseText}`);
+  }
+
+  const tokens = JSON.parse(responseText);
+  const idTokenPayload = tokens.id_token ? parseJWT(tokens.id_token) : null;
+  const tokenEmail = idTokenPayload?.email;
+
+  if (tokenEmail && tokenEmail.toLowerCase() !== email.toLowerCase()) {
+    throw new Error(`刷新 Token 邮箱不匹配！\n期望: ${email}\n实际: ${tokenEmail}`);
+  }
+
+  return {
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token || refreshToken,
+    id_token: tokens.id_token || null,
+    refreshed_at: new Date().toISOString()
+  };
+}
+
 async function proxyHttpRequest(request) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), request.timeout || 30000);
@@ -192,7 +232,29 @@ async function refreshQuotas(options = {}) {
       if (!shouldRefreshAccount(account, options)) continue;
 
       try {
-        const quota = await fetchQuota(account.codexTokens.access_token);
+        let quota;
+        try {
+          quota = await fetchQuota(account.codexTokens.access_token);
+        } catch (error) {
+          if (!(error.status === 401 || error.status === 403 || error.message === 'token_expired')) {
+            throw error;
+          }
+
+          const refreshedTokens = await refreshAccessToken(
+            account.codexTokens.refresh_token,
+            account.email
+          );
+          account.codexTokens = {
+            ...account.codexTokens,
+            access_token: refreshedTokens.access_token || account.codexTokens.access_token,
+            refresh_token: refreshedTokens.refresh_token || account.codexTokens.refresh_token,
+            id_token: refreshedTokens.id_token || account.codexTokens.id_token,
+            authorized_at: refreshedTokens.refreshed_at || account.codexTokens.authorized_at,
+            status: 'authorized'
+          };
+          quota = await fetchQuota(account.codexTokens.access_token);
+        }
+
         account.codexTokens = {
           ...account.codexTokens,
           quota,
@@ -202,7 +264,7 @@ async function refreshQuotas(options = {}) {
         result.refreshed += 1;
         changed = true;
       } catch (error) {
-        console.error('[GPTeam Quota] refresh failed:', account.email, error);
+        console.warn('[GPTeam Quota] refresh failed:', account.email, error);
         if (error.status === 401 || error.status === 403 || error.message === 'token_expired') {
           account.codexTokens = {
             ...account.codexTokens,
