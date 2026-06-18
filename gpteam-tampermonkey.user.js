@@ -304,6 +304,29 @@
         return '';
     }
 
+    // 工具函数：格式化额度最后刷新时间
+    function getQuotaUpdatedText(updatedAt) {
+        if (!updatedAt) return '';
+
+        const date = new Date(updatedAt);
+        if (Number.isNaN(date.getTime())) return '';
+
+        const now = new Date();
+        const sameDay = date.getFullYear() === now.getFullYear()
+            && date.getMonth() === now.getMonth()
+            && date.getDate() === now.getDate();
+        const timeText = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+
+        if (sameDay) {
+            return `最后刷新: ${timeText}`;
+        }
+
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+        const daysAgo = Math.max(1, Math.floor((todayStart - dateStart) / 86400000));
+        return `最后刷新: ${daysAgo}天前`;
+    }
+
     // 样式定义
     GM_addStyle(`
         #account-panel {
@@ -660,6 +683,11 @@
             background: #f3f4f6;
             white-space: nowrap;
             font-weight: 600;
+        }
+
+        .email-quota-line .quota-updated-time {
+            color: #6b7280;
+            font-weight: 500;
         }
 
         /* 保留旧的email-meta类以防万一 */
@@ -2446,9 +2474,11 @@
                 const quotaLine = item.querySelector('.email-quota-line');
                 if (quotaLine) {
                     if (quotaDisplay) {
+                        const updatedText = getQuotaUpdatedText(account.codexTokens?.quota_updated_at);
                         quotaLine.innerHTML = `
                             ${quotaDisplay.hourly ? `<span style="color: ${quotaDisplay.hourly.color};">${quotaDisplay.hourly.text}${quotaDisplay.hourly.resetText}</span>` : ''}
                             ${quotaDisplay.weekly ? `<span style="color: ${quotaDisplay.weekly.color};">${quotaDisplay.weekly.text}${quotaDisplay.weekly.resetText}</span>` : ''}
+                            ${updatedText ? `<span class="quota-updated-time">${updatedText}</span>` : ''}
                         `;
                     } else {
                         quotaLine.innerHTML = '';
@@ -2911,6 +2941,7 @@
                 const hasToken = account.codexTokens && account.codexTokens.access_token;
                 const tokenStatus = hasToken ? account.codexTokens.status : null;
                 const quotaDisplay = getQuotaDisplay(account);
+                const quotaUpdatedText = getQuotaUpdatedText(account.codexTokens?.quota_updated_at);
                 const isRecentlyRemoved = !isJoined && account.lastGptSeatAt &&
                     (Date.now() - new Date(account.lastGptSeatAt).getTime()) < 10 * 60 * 1000;
 
@@ -2945,6 +2976,7 @@
                                     ${quotaDisplay ? `<div class="email-quota-line">
                                         ${quotaDisplay.hourly ? `<span style="color: ${quotaDisplay.hourly.color};">${quotaDisplay.hourly.text}${quotaDisplay.hourly.resetText}</span>` : ''}
                                         ${quotaDisplay.weekly ? `<span style="color: ${quotaDisplay.weekly.color};">${quotaDisplay.weekly.text}${quotaDisplay.weekly.resetText}</span>` : ''}
+                                        ${quotaUpdatedText ? `<span class="quota-updated-time">${quotaUpdatedText}</span>` : ''}
                                     </div>` : ''}
                                 </div>
                             </div>

@@ -148,6 +148,11 @@ body {
   font-weight: 600;
 }
 
+.quota-updated {
+  color: #6b7280;
+  font-weight: 500;
+}
+
 .empty {
   padding: 40px 12px;
   color: #888;

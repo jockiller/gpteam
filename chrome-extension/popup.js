@@ -45,6 +45,27 @@ function resetText(resetTime) {
   return '';
 }
 
+function quotaUpdatedText(updatedAt) {
+  if (!updatedAt) return '';
+  const date = new Date(updatedAt);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const now = new Date();
+  const sameDay = date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate();
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+
+  if (sameDay) {
+    return `最后刷新: ${time}`;
+  }
+
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const daysAgo = Math.max(1, Math.floor((todayStart - dateStart) / 86400000));
+  return `最后刷新: ${daysAgo}天前`;
+}
+
 function escapeHtml(value) {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -84,6 +105,7 @@ function render(accounts) {
     const quota = account.codexTokens?.quota;
     const hourly = quota ? Math.round(quota.hourly_percentage || 0) : null;
     const weekly = quota ? Math.round(quota.weekly_percentage || 0) : null;
+    const updatedText = quotaUpdatedText(account.codexTokens?.quota_updated_at);
 
     return `
       <article class="item ${account.status === 'joined' ? 'joined' : ''}">
@@ -98,6 +120,7 @@ function render(accounts) {
         ${quota ? `<div class="quota">
           <span class="pill" style="color:${quotaColor(hourly)};">5h: ${hourly}%${resetText(quota.hourly_reset_time || 0)}</span>
           <span class="pill" style="color:${quotaColor(weekly)};">周: ${weekly}%${resetText(quota.weekly_reset_time || 0)}</span>
+          ${updatedText ? `<span class="pill quota-updated">${escapeHtml(updatedText)}</span>` : ''}
         </div>` : ''}
       </article>
     `;
