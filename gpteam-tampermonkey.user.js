@@ -1898,6 +1898,9 @@
                     return;
                 }
 
+                // 单独点击授权时也先复制邮箱，确保 auth.openai.com 标记当前账号行。
+                await this.handleCopy(email);
+
                 const codexOAuth = new CodexOAuthManager();
 
                 // 生成PKCE参数
@@ -3113,4 +3116,3 @@
         setTimeout(init, 1000);
     }
 })();
-

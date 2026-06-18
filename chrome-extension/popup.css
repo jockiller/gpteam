@@ -17,6 +17,10 @@ body {
 }
 
 .header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 12px 14px;
   color: white;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -31,6 +35,23 @@ body {
   margin-top: 3px;
   font-size: 11px;
   opacity: 0.85;
+}
+
+.open-members {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.18);
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.open-members:hover {
+  background: rgba(255, 255, 255, 0.28);
 }
 
 .stats {

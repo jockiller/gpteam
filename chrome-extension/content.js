@@ -21,6 +21,13 @@
         chrome.storage.local.set({ [key]: value });
     }
 
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName !== 'local') return;
+        Object.entries(changes).forEach(([key, change]) => {
+            gpteamStorageCache[key] = change.newValue;
+        });
+    });
+
     function GM_xmlhttpRequest(options) {
         chrome.runtime.sendMessage({
             type: 'gpteam_http_request',
@@ -1125,6 +1132,10 @@
 
         save() {
             GM_setValue(this.storageKey, JSON.stringify(this.accounts));
+        }
+
+        reload() {
+            this.accounts = this.load();
         }
 
         // 获取今日日期字符串 YYYY-MM-DD
@@ -2556,37 +2567,20 @@
             }
 
             console.log('[Quota] 刷新额度:', email);
-            const codexOAuth = new CodexOAuthManager();
 
             try {
-                const quota = await codexOAuth.fetchQuota(account.codexTokens.access_token);
-
-                // 更新额度信息
-                this.manager.update(email, {
-                    codexTokens: {
-                        ...account.codexTokens,
-                        quota: quota,
-                        quota_updated_at: new Date().toISOString(),
-                        status: 'authorized'
-                    }
+                await chrome.runtime.sendMessage({
+                    type: 'gpteam_refresh_quotas',
+                    force: true,
+                    email
                 });
-
+                this.manager.reload();
                 this.updateExistingElements();
 
             } catch (error) {
                 console.error('[Quota] 额度刷新失败:', email, error);
-
-                // 如果是401/403，标记为过期
-                if (error.status === 401 || error.status === 403 || error.error === 'token_expired') {
-                    this.manager.update(email, {
-                        codexTokens: {
-                            ...account.codexTokens,
-                            status: 'expired',
-                            quota_updated_at: new Date().toISOString()
-                        }
-                    });
-                    this.updateExistingElements();
-                }
+                this.manager.reload();
+                this.updateExistingElements();
             }
         }
 
@@ -2608,9 +2602,12 @@
                 refreshBtn.disabled = true;
             }
 
-            // 并发刷新所有账户
-            const promises = accounts.map(account => this.refreshSingleQuota(account.email));
-            await Promise.all(promises);
+            await chrome.runtime.sendMessage({
+                type: 'gpteam_refresh_quotas',
+                force: true
+            });
+            this.manager.reload();
+            this.updateExistingElements();
 
             // 恢复按钮状态
             if (refreshBtn) {
@@ -3078,29 +3075,22 @@
                     }
                 }
             });
+
+            chrome.storage.onChanged.addListener((changes, areaName) => {
+                if (areaName !== 'local' || !changes[this.manager.storageKey]) return;
+                this.manager.reload();
+                this.updateExistingElements();
+            });
         }
 
         // 检查并刷新需要更新的额度
         checkAndRefreshQuotas() {
             this.lastQuotaCheckTime = Date.now();
-
-            const accounts = this.manager.getAll().filter(a =>
-                a.codexTokens &&
-                a.codexTokens.access_token &&
-                a.codexTokens.status === 'authorized'
-            );
-
-            accounts.forEach(account => {
-                const lastUpdate = account.codexTokens.quota_updated_at
-                    ? new Date(account.codexTokens.quota_updated_at).getTime()
-                    : 0;
-                const timeSinceUpdate = Date.now() - lastUpdate;
-                const twoMinutes = 2 * 60 * 1000;
-
-                // 如果距离上次更新超过2分钟，则刷新
-                if (timeSinceUpdate > twoMinutes) {
-                    this.refreshSingleQuota(account.email);
-                }
+            chrome.runtime.sendMessage({
+                type: 'gpteam_refresh_quotas',
+                force: false
+            }).catch(error => {
+                console.warn('[Quota] 后台刷新触发失败:', error);
             });
         }
     }

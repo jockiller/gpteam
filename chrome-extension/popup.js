@@ -1,4 +1,5 @@
 const STORAGE_KEY = 'chatgpt_accounts';
+const MEMBERS_URL = 'https://chatgpt.com/admin/members';
 
 function loadAccounts(raw) {
   try {
@@ -105,9 +106,35 @@ function render(accounts) {
 
 async function init() {
   const stored = await chrome.storage.local.get(STORAGE_KEY);
-  const accounts = loadAccounts(stored[STORAGE_KEY]);
+  let accounts = loadAccounts(stored[STORAGE_KEY]);
   render(accounts);
   document.getElementById('search').addEventListener('input', () => render(accounts));
+  document.getElementById('open-members').addEventListener('click', openMembersPage);
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !changes[STORAGE_KEY]) return;
+    accounts = loadAccounts(changes[STORAGE_KEY].newValue);
+    render(accounts);
+  });
+
+  chrome.runtime.sendMessage({
+    type: 'gpteam_refresh_quotas',
+    force: false
+  }).catch(() => {});
 }
 
 init();
+
+async function openMembersPage() {
+  const tabs = await chrome.tabs.query({ url: 'https://chatgpt.com/admin/members*' });
+  const existing = tabs[0];
+  if (existing?.id) {
+    await chrome.tabs.update(existing.id, { active: true, url: MEMBERS_URL });
+    if (existing.windowId != null) {
+      await chrome.windows.update(existing.windowId, { focused: true });
+    }
+  } else {
+    await chrome.tabs.create({ url: MEMBERS_URL, active: true });
+  }
+  window.close();
+}

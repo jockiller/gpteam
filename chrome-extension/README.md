@@ -13,9 +13,10 @@ Chrome MV3 version of the GPTeam Tampermonkey script.
 ## Behavior
 
 - The members page injects the full GPTeam operation panel.
-- OAuth authorization opens in a new tab.
+- OAuth authorization opens in a popup window.
 - When the OAuth flow redirects to `http://localhost:1455/auth/callback`, the background service worker captures the callback URL, exchanges the code for tokens, closes the callback tab, and notifies the members page.
 - The extension popup is read-only. It shows stored accounts, status, notes, and quota data, but hides operational buttons because those actions require the live members page DOM.
+- Quota refresh runs in the background with `chrome.alarms`, so stored authorized accounts can update even when the members page is not open.
 
 ## Storage
 
@@ -31,4 +32,5 @@ The extension needs:
 
 - `storage` for local account/token data.
 - `tabs` to open OAuth tabs and detect the `localhost:1455` callback URL.
+- `alarms` to refresh quota data in the background.
 - host permissions for ChatGPT, OpenAI auth, and local callback/upload URLs.
