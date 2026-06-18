@@ -408,8 +408,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 
   const session = await getOAuthSession(state);
   if (!session) {
-    console.warn('[GPTeam OAuth] callback session not found:', state);
-    closeTab(tabId);
+    console.warn('[GPTeam OAuth] ignored callback for unknown state:', state);
     return;
   }
 
