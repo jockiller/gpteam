@@ -137,9 +137,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.set({
       codex_oauth_session: JSON.stringify(session)
     });
-    chrome.tabs.create({ url: message.authUrl, active: true }, (tab) => {
+    chrome.windows.create({
+      url: message.authUrl,
+      type: 'popup',
+      width: 500,
+      height: 700,
+      focused: true
+    }, (win) => {
       if (chrome.runtime.lastError) {
         sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+        return;
+      }
+      const tab = win?.tabs?.[0];
+      if (!tab?.id) {
+        sendResponse({ ok: false, error: '授权窗口创建失败' });
         return;
       }
       session.authTabId = tab.id;
