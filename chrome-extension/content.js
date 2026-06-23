@@ -57,9 +57,6 @@
 
     const unsafeWindow = window;
 
-    // 是否启用上传到 Cockpit 功能（控制上传按钮显示及 OAuth 授权后自动上传）
-    const ENABLE_UPLOAD = false;
-
     // 检测当前页面
     const isAuthPage = window.location.hostname === 'auth.openai.com';
     const isChatGPTSite = window.location.hostname === 'chatgpt.com';
@@ -223,30 +220,7 @@
                         try {
                             const data = JSON.parse(response.responseText);
 
-                            // 解析额度信息
-                            const rateLimit = data.rate_limit || {};
-                            const primaryWindow = rateLimit.primary_window || {};
-                            const secondaryWindow = rateLimit.secondary_window || {};
-
-                            // Primary window = 5小时配额
-                            const hourlyUsedPct = primaryWindow.used_percent || 0;
-                            const hourlyRemaining = Math.max(0, 100 - hourlyUsedPct);
-                            const hourlyResetAt = primaryWindow.reset_at || null;
-
-                            // Secondary window = 周配额
-                            const weeklyUsedPct = secondaryWindow.used_percent || 0;
-                            const weeklyRemaining = Math.max(0, 100 - weeklyUsedPct);
-                            const weeklyResetAt = secondaryWindow.reset_at || null;
-
-                            const quota = {
-                                hourly_percentage: hourlyRemaining,
-                                hourly_reset_time: hourlyResetAt,
-                                weekly_percentage: weeklyRemaining,
-                                weekly_reset_time: weeklyResetAt,
-                                raw_data: data
-                            };
-
-                            resolve(quota);
+                            resolve(parseQuotaResponse(data));
 
                         } catch (error) {
                             console.error('[Quota] 解析响应失败:', error);
@@ -331,13 +305,120 @@
         const now = Math.floor(Date.now() / 1000);
         if (resetTime > now) {
             const diffSeconds = resetTime - now;
-            const hours = Math.floor(diffSeconds / 3600);
+            const days = Math.floor(diffSeconds / 86400);
+            const hours = Math.floor((diffSeconds % 86400) / 3600);
             const minutes = Math.floor((diffSeconds % 3600) / 60);
+            if (days > 0) {
+                return ` (${days}天${hours}h)`;
+            }
             return ` (${hours}h${minutes}m)`;
         } else if (resetTime > 0) {
             return ' (已重置)';
         }
         return '';
+    }
+
+    function collectRateLimitWindows(rateLimit) {
+        if (!rateLimit || typeof rateLimit !== 'object') return [];
+
+        const preferredKeys = ['primary_window', 'secondary_window'];
+        const extraKeys = Object.keys(rateLimit)
+            .filter(key => key.endsWith('_window') && !preferredKeys.includes(key));
+
+        return [...preferredKeys, ...extraKeys]
+            .map(key => parseQuotaWindow(rateLimit[key]))
+            .filter(Boolean);
+    }
+
+    function parseQuotaWindow(windowData) {
+        if (!windowData || typeof windowData !== 'object' || Object.keys(windowData).length === 0) {
+            return null;
+        }
+
+        const storedPct = Number(windowData.percentage);
+        const usedPct = Number(windowData.used_percent);
+        const remainingPct = Number.isFinite(storedPct)
+            ? Math.max(0, Math.min(100, storedPct))
+            : Number.isFinite(usedPct)
+                ? Math.max(0, Math.min(100, 100 - usedPct))
+                : 100;
+
+        return {
+            percentage: remainingPct,
+            reset_time: windowData.reset_time || windowData.reset_at || null,
+            limit_window_seconds: windowData.limit_window_seconds || null,
+            reset_after_seconds: windowData.reset_after_seconds || null
+        };
+    }
+
+    function parseQuotaResponse(data) {
+        const rateLimit = data.rate_limit || {};
+        const windows = collectRateLimitWindows(rateLimit);
+        const firstWindow = windows[0] || null;
+        const secondWindow = windows[1] || null;
+
+        return {
+            windows,
+            // 旧字段保留，兼容已有导出和历史存储。
+            hourly_percentage: firstWindow ? firstWindow.percentage : null,
+            hourly_reset_time: firstWindow ? firstWindow.reset_time : null,
+            weekly_percentage: secondWindow ? secondWindow.percentage : null,
+            weekly_reset_time: secondWindow ? secondWindow.reset_time : null,
+            raw_data: data
+        };
+    }
+
+    function hasLegacyQuotaWindow(quota, percentageKey, resetKey, rawWindowKey) {
+        if (quota[percentageKey] == null && quota[resetKey] == null) return false;
+        const rawRateLimit = quota.raw_data && quota.raw_data.rate_limit;
+        if (rawRateLimit && rawRateLimit[rawWindowKey] == null) return false;
+        return true;
+    }
+
+    function getStoredQuotaWindows(quota) {
+        if (!quota) return [];
+
+        if (Array.isArray(quota.windows) && quota.windows.length > 0) {
+            return quota.windows
+                .map(windowData => parseQuotaWindow(windowData))
+                .filter(Boolean);
+        }
+
+        const windows = [];
+        if (hasLegacyQuotaWindow(quota, 'hourly_percentage', 'hourly_reset_time', 'primary_window')) {
+            windows.push({
+                percentage: quota.hourly_percentage || 0,
+                reset_time: quota.hourly_reset_time || null
+            });
+        }
+        if (hasLegacyQuotaWindow(quota, 'weekly_percentage', 'weekly_reset_time', 'secondary_window')) {
+            windows.push({
+                percentage: quota.weekly_percentage || 0,
+                reset_time: quota.weekly_reset_time || null
+            });
+        }
+        return windows;
+    }
+
+    function getQuotaDisplayWindows(quota, status) {
+        const now = Math.floor(Date.now() / 1000);
+        return getStoredQuotaWindows(quota).map(windowData => {
+            const resetTime = windowData.reset_time || 0;
+            const hasReset = status === 'expired' && resetTime > 0 && now > resetTime;
+            const percentage = hasReset ? 100 : (Number(windowData.percentage) || 0);
+
+            return {
+                text: `${Math.round(percentage)}%`,
+                color: getQuotaColor(percentage),
+                resetText: hasReset ? ' (已重置)' : getResetText(resetTime)
+            };
+        });
+    }
+
+    function renderQuotaDisplay(quotaDisplay) {
+        return (quotaDisplay?.windows || [])
+            .map(item => `<span style="color: ${item.color};">${item.text}${item.resetText}</span>`)
+            .join('');
     }
 
     // 工具函数：格式化额度最后刷新时间
@@ -1206,7 +1287,7 @@
                 lastGptSeatAt: null,
                 role: null,
                 note: '',
-                codexTokens: null  // { access_token, refresh_token, id_token, authorized_at, status: 'authorized'|'expired', quota: { hourly_percentage, weekly_percentage, hourly_reset_time, weekly_reset_time }, quota_updated_at }
+                codexTokens: null  // { access_token, refresh_token, id_token, authorized_at, status: 'authorized'|'expired', quota: { windows, hourly_percentage, hourly_reset_time }, quota_updated_at }
             });
             this.save();
             return { success: true };
@@ -1239,13 +1320,74 @@
                         seatType: null,
                         lastGptSeatAt: null,
                         role: null,
-                        note: ''
+                        note: '',
+                        codexTokens: null
                     });
                     results.success.push(email);
                 }
             });
 
             this.save();
+            return results;
+        }
+
+        importTokenRecords(records) {
+            const results = {
+                imported: [],
+                updated: [],
+                failed: []
+            };
+            const uniqueRecords = new Map();
+
+            records.forEach((record, index) => {
+                const email = (record.email || '').trim().toLowerCase();
+                if (!this.validate(email) || !record.access_token) {
+                    results.failed.push(index + 1);
+                    return;
+                }
+                uniqueRecords.set(email, { ...record, email });
+            });
+
+            uniqueRecords.forEach(record => {
+                const now = new Date().toISOString();
+                const codexTokens = {
+                    access_token: record.access_token,
+                    refresh_token: record.refresh_token || '',
+                    id_token: record.id_token || '',
+                    authorized_at: record.authorized_at || now,
+                    status: record.status || 'authorized',
+                    quota: record.quota || null,
+                    quota_updated_at: record.quota_updated_at || null
+                };
+
+                if (record.account_id) codexTokens.account_id = record.account_id;
+                if (record.user_id) codexTokens.user_id = record.user_id;
+                if (record.organization_id) codexTokens.organization_id = record.organization_id;
+
+                const existing = this.accounts.find(a => a.email === record.email);
+                if (existing) {
+                    existing.codexTokens = codexTokens;
+                    if (!existing.note && record.note) existing.note = record.note;
+                    results.updated.push(record.email);
+                } else {
+                    this.accounts.push({
+                        email: record.email,
+                        addedAt: now,
+                        joinedAt: null,
+                        status: 'pending',
+                        seatType: null,
+                        lastGptSeatAt: null,
+                        role: null,
+                        note: record.note || '',
+                        codexTokens
+                    });
+                    results.imported.push(record.email);
+                }
+            });
+
+            if (results.imported.length > 0 || results.updated.length > 0) {
+                this.save();
+            }
             return results;
         }
 
@@ -1380,18 +1522,18 @@
 
     function resolveAccountIdFromAccount(account) {
         const auth = resolveAuthPayloadFromTokens(account.codexTokens);
-        return (auth && (auth.chatgpt_account_id || auth.account_id)) || null;
+        return (auth && (auth.chatgpt_account_id || auth.account_id)) || account.codexTokens.account_id || null;
     }
 
     function resolveUserIdFromAccount(account) {
         const idPayload = decodeJwtPayloadStandalone(account.codexTokens.id_token);
         const auth = resolveAuthPayloadFromTokens(account.codexTokens);
-        return (auth && (auth.chatgpt_user_id || auth.user_id)) || (idPayload && idPayload.sub) || null;
+        return (auth && (auth.chatgpt_user_id || auth.user_id)) || account.codexTokens.user_id || (idPayload && idPayload.sub) || null;
     }
 
     function resolveOrganizationIdFromAccount(account) {
         const auth = resolveAuthPayloadFromTokens(account.codexTokens);
-        return (auth && auth.organization_id) || null;
+        return (auth && auth.organization_id) || account.codexTokens.organization_id || null;
     }
 
     function resolvePlanTypeFromAccount(account) {
@@ -1416,6 +1558,144 @@
         const d = new Date(millis);
         if (isNaN(d.getTime())) return undefined;
         return d.toISOString();
+    }
+
+    function isValidEmailAddress(value) {
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+    }
+
+    function firstNonEmptyString(...values) {
+        for (const value of values) {
+            if (typeof value === 'string' && value.trim()) {
+                return value.trim();
+            }
+        }
+        return '';
+    }
+
+    function normalizeTimestamp(value) {
+        if (value == null || value === '') return '';
+        const millis = typeof value === 'number'
+            ? (value > 1e12 ? value : value * 1000)
+            : Date.parse(value);
+        if (!Number.isFinite(millis)) return '';
+        const date = new Date(millis);
+        return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+    }
+
+    function resolveEmailFromTokenPayload(payload) {
+        if (!payload || typeof payload !== 'object') return '';
+        const profile = payload['https://api.openai.com/profile'];
+        return firstNonEmptyString(
+            payload.email,
+            profile && profile.email
+        );
+    }
+
+    function resolveTokenExpiryIso(accessToken, idToken) {
+        const accessPayload = decodeJwtPayloadStandalone(accessToken);
+        const idPayload = decodeJwtPayloadStandalone(idToken);
+        const exp = (accessPayload && accessPayload.exp) || (idPayload && idPayload.exp);
+        return exp ? normalizeTimestamp(exp) : '';
+    }
+
+    function getTokenImportCandidates(data) {
+        if (Array.isArray(data)) return data;
+        if (!data || typeof data !== 'object') return [];
+        if (Array.isArray(data.accounts)) return data.accounts;
+        if (Array.isArray(data.data)) return data.data;
+        if (Array.isArray(data.tokens)) return data.tokens;
+        return [data];
+    }
+
+    function normalizeImportedTokenRecord(item) {
+        if (!item || typeof item !== 'object') return null;
+
+        const credentials = item.credentials && typeof item.credentials === 'object' ? item.credentials : {};
+        const nestedTokens = item.tokens && typeof item.tokens === 'object' ? item.tokens : {};
+        const tokenSource = Object.keys(nestedTokens).length > 0
+            ? nestedTokens
+            : Object.keys(credentials).length > 0
+                ? credentials
+                : item;
+
+        const accessToken = firstNonEmptyString(tokenSource.access_token, item.access_token);
+        if (!accessToken) return null;
+
+        const idToken = firstNonEmptyString(tokenSource.id_token, item.id_token);
+        const refreshToken = firstNonEmptyString(tokenSource.refresh_token, item.refresh_token);
+        const idPayload = decodeJwtPayloadStandalone(idToken);
+        const accessPayload = decodeJwtPayloadStandalone(accessToken);
+        const nameAsEmail = isValidEmailAddress(item.name) ? item.name : '';
+        const email = firstNonEmptyString(
+            item.email,
+            credentials.email,
+            nameAsEmail,
+            resolveEmailFromTokenPayload(idPayload),
+            resolveEmailFromTokenPayload(accessPayload)
+        ).toLowerCase();
+
+        if (!isValidEmailAddress(email)) return null;
+
+        const expiresAt = firstNonEmptyString(
+            normalizeTimestamp(item.expired),
+            normalizeTimestamp(item.expires_at),
+            normalizeTimestamp(credentials.expires_at),
+            resolveTokenExpiryIso(accessToken, idToken)
+        );
+        const isExpired = expiresAt && Date.parse(expiresAt) <= Date.now();
+        const sourceStatus = firstNonEmptyString(item.status, credentials.status).toLowerCase();
+
+        return {
+            email,
+            access_token: accessToken,
+            refresh_token: refreshToken,
+            id_token: idToken,
+            authorized_at: firstNonEmptyString(
+                normalizeTimestamp(item.authorized_at),
+                normalizeTimestamp(item.last_refresh),
+                normalizeTimestamp(item.refreshed_at),
+                normalizeTimestamp(item.exported_at),
+                new Date().toISOString()
+            ),
+            status: sourceStatus === 'expired' || isExpired ? 'expired' : 'authorized',
+            quota: item.quota && typeof item.quota === 'object' ? item.quota : null,
+            quota_updated_at: normalizeTimestamp(item.quota_updated_at),
+            note: firstNonEmptyString(item.note),
+            account_id: firstNonEmptyString(item.account_id, item.chatgpt_account_id, credentials.chatgpt_account_id, credentials.account_id),
+            user_id: firstNonEmptyString(item.user_id, item.chatgpt_user_id, credentials.chatgpt_user_id, credentials.user_id),
+            organization_id: firstNonEmptyString(item.organization_id, credentials.organization_id)
+        };
+    }
+
+    function parseTokenImportText(text) {
+        const trimmed = String(text || '').trim();
+        if (!/^[\[{]/.test(trimmed)) return null;
+
+        let data;
+        try {
+            data = JSON.parse(trimmed);
+        } catch (error) {
+            throw new Error(`JSON 格式错误：${error.message}`);
+        }
+
+        const candidates = getTokenImportCandidates(data);
+        const records = [];
+        let skipped = 0;
+        candidates.forEach(item => {
+            const record = normalizeImportedTokenRecord(item);
+            if (record) {
+                records.push(record);
+            } else {
+                skipped += 1;
+            }
+        });
+
+        if (records.length === 0) {
+            throw new Error('JSON 中没有识别到包含 access_token 和邮箱的账户');
+        }
+
+        return { records, skipped };
     }
 
     function toPortableTokenStorage(account) {
@@ -1534,7 +1814,7 @@
 
             this.panel.innerHTML = `
                 <div class="panel-header">
-                    <div class="panel-title">GPTeam v5.3.1</div>
+                    <div class="panel-title">GPTeam v5.4.1</div>
                     <button class="panel-toggle" id="toggle-btn">−</button>
                 </div>
                 <div class="panel-body">
@@ -1614,13 +1894,46 @@
         // 显示添加邮箱对话框
         async showAddEmailDialog() {
             const emailsText = await this.showCustomPrompt(
-                '➕ 添加邮箱',
-                '输入一个或多个邮箱地址\n支持多行或逗号分隔',
+                '➕ 添加邮箱 / 导入 Token',
+                '输入一个或多个邮箱地址，或粘贴 Token JSON\n支持多行、逗号分隔邮箱，以及 Cockpit/cpa/sub2api Token JSON',
                 '',
                 true  // 使用多行textarea
             );
 
             if (!emailsText || !emailsText.trim()) {
+                return;
+            }
+
+            let tokenImport = null;
+            try {
+                tokenImport = parseTokenImportText(emailsText);
+            } catch (error) {
+                this.showCustomAlert('导入失败', error.message, 'warning');
+                return;
+            }
+
+            if (tokenImport) {
+                const results = this.manager.importTokenRecords(tokenImport.records);
+                const importedCount = results.imported.length;
+                const updatedCount = results.updated.length;
+                const skippedCount = tokenImport.skipped + results.failed.length;
+                const changedCount = importedCount + updatedCount;
+                let message = '';
+
+                if (importedCount > 0) message += `✓ 新增 ${importedCount} 个账户\n`;
+                if (updatedCount > 0) message += `↻ 更新 ${updatedCount} 个账户\n`;
+                if (skippedCount > 0) message += `⚠ 跳过 ${skippedCount} 条无效记录\n`;
+                if (changedCount > 0) {
+                    message += '\n已导入的账户会直接标记为已授权，无需再次授权。';
+                    this.render();
+                    this.reportAccountsToCockpit([...results.imported, ...results.updated]);
+                }
+
+                this.showCustomAlert(
+                    'Token 导入结果',
+                    message.trim() || '未导入任何账户',
+                    skippedCount > 0 ? 'warning' : 'success'
+                );
                 return;
             }
 
@@ -2053,34 +2366,7 @@
                 });
 
                 console.log('授权成功:', email);
-
-                const exportFormat = [{
-                    email: email,
-                    account_id: null,
-                    user_id: null,
-                    organization_id: null,
-                    tokens: {
-                        id_token: result.tokens.id_token,
-                        access_token: result.tokens.access_token,
-                        refresh_token: result.tokens.refresh_token
-                    },
-                    authorized_at: result.tokens.authorized_at,
-                    status: 'authorized',
-                    quota: null,
-                    quota_updated_at: null,
-                    note: '',
-                    exported_at: new Date().toISOString()
-                }];
-
-                if (ENABLE_UPLOAD) {
-                    this.uploadTokenToCockpit(exportFormat)
-                        .then(() => {
-                            console.log('[Cockpit] Token已上传到Cockpit');
-                        })
-                        .catch(err => {
-                            console.warn('[Cockpit] 上传Token到Cockpit失败，但不影响授权:', err.message);
-                        });
-                }
+                this.reportAccountsToCockpit([email]);
 
                 this.showCustomAlert('授权成功', `邮箱：${email}\n\n点击确定后将刷新页面以识别新成员`, 'success', () => {
                     window.location.reload();
@@ -2141,7 +2427,7 @@
 
                 // 根据multiline决定使用input还是textarea
                 const inputHtml = multiline
-                    ? `<textarea id="prompt-input" rows="8" style="width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin-bottom: 20px; box-sizing: border-box; color: #1f2937; background: #f9fafb; resize: vertical;" placeholder="输入邮箱地址，支持多行或逗号分隔">${defaultValue}</textarea>`
+                    ? `<textarea id="prompt-input" rows="8" style="width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin-bottom: 20px; box-sizing: border-box; color: #1f2937; background: #f9fafb; resize: vertical;" placeholder="输入邮箱，或粘贴 Token JSON">${defaultValue}</textarea>`
                     : `<input type="text" id="prompt-input" value="${defaultValue}" style="width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; font-family: monospace; margin-bottom: 20px; box-sizing: border-box; color: #1f2937; background: #f9fafb;" placeholder="http://localhost:1455/auth/callback?code=..." />`;
 
                 dialog.innerHTML = `
@@ -2261,7 +2547,46 @@
             return overlay;
         }
 
-        // 上传 Token 到 Cockpit API
+        getCockpitExportData(accounts) {
+            return accounts.map(a => ({
+                email: a.email,
+                account_id: resolveAccountIdFromAccount(a) || null,
+                user_id: resolveUserIdFromAccount(a) || null,
+                organization_id: resolveOrganizationIdFromAccount(a) || null,
+                tokens: {
+                    id_token: a.codexTokens.id_token,
+                    access_token: a.codexTokens.access_token,
+                    refresh_token: a.codexTokens.refresh_token
+                },
+                authorized_at: a.codexTokens.authorized_at,
+                status: a.codexTokens.status || 'authorized',
+                quota: a.codexTokens.quota || null,
+                quota_updated_at: a.codexTokens.quota_updated_at || null,
+                note: a.note || '',
+                exported_at: new Date().toISOString()
+            }));
+        }
+
+        reportAccountsToCockpit(emails) {
+            const emailSet = new Set((emails || []).map(email => String(email).toLowerCase()));
+            const accounts = this.manager.getAll().filter(a =>
+                a.codexTokens &&
+                a.codexTokens.access_token &&
+                (emailSet.size === 0 || emailSet.has(a.email))
+            );
+
+            if (accounts.length === 0) return;
+
+            this.uploadTokenToCockpit(this.getCockpitExportData(accounts))
+                .then(() => {
+                    console.log('[Cockpit] 已上报 Token:', accounts.length);
+                })
+                .catch(error => {
+                    console.debug('[Cockpit] 后台服务未启动或上报失败，已跳过:', error.message);
+                });
+        }
+
+        // 上报 Token 到本机 Cockpit API；失败不影响插件主流程。
         uploadTokenToCockpit(tokenData) {
             return new Promise((resolve, reject) => {
                 const cockpitApiUrl = 'http://localhost:19315/v1/cockpit/import-token';
@@ -2278,23 +2603,23 @@
                         'Content-Type': 'application/json'
                     },
                     data: JSON.stringify(dataToSend),
-                    timeout: 30000,  // 30秒超时
+                    timeout: 5000,
                     onload: (response) => {
                         if (response.status === 200 || response.status === 201) {
                             console.log('[Cockpit] Token上传成功:', response.responseText);
                             resolve(response.responseText);
                         } else {
-                            console.error('[Cockpit] Token上传失败:', response.status, response.responseText);
+                            console.debug('[Cockpit] Token上报失败:', response.status, response.responseText);
                             reject(new Error(`HTTP ${response.status}: ${response.responseText}`));
                         }
                     },
                     onerror: (error) => {
-                        console.error('[Cockpit] Token上传网络错误:', error);
+                        console.debug('[Cockpit] Token上报网络错误:', error);
                         reject(new Error(`网络请求失败: ${error.error || 'Unknown error'}`));
                     },
                     ontimeout: () => {
-                        console.error('[Cockpit] Token上传超时');
-                        reject(new Error('请求超时，请检查 Cockpit 服务是否正常运行'));
+                        console.debug('[Cockpit] Token上报超时');
+                        reject(new Error('请求超时'));
                     }
                 });
             });
@@ -2487,18 +2812,25 @@
                 item.classList.toggle('selected', isSelected);
 
                 // 更新额度显示
-                const quotaLine = item.querySelector('.email-quota-line');
-                if (quotaLine) {
-                    if (quotaDisplay) {
-                        const updatedText = getQuotaUpdatedText(account.codexTokens?.quota_updated_at);
+                let quotaLine = item.querySelector('.email-quota-line');
+                if (quotaDisplay) {
+                    const updatedText = getQuotaUpdatedText(account.codexTokens?.quota_updated_at);
+                    if (!quotaLine) {
+                        const contentLeft = item.querySelector('.email-content-left');
+                        if (contentLeft) {
+                            quotaLine = document.createElement('div');
+                            quotaLine.className = 'email-quota-line';
+                            contentLeft.appendChild(quotaLine);
+                        }
+                    }
+                    if (quotaLine) {
                         quotaLine.innerHTML = `
-                            ${quotaDisplay.hourly ? `<span style="color: ${quotaDisplay.hourly.color};">${quotaDisplay.hourly.text}${quotaDisplay.hourly.resetText}</span>` : ''}
-                            ${quotaDisplay.weekly ? `<span style="color: ${quotaDisplay.weekly.color};">${quotaDisplay.weekly.text}${quotaDisplay.weekly.resetText}</span>` : ''}
+                            ${renderQuotaDisplay(quotaDisplay)}
                             ${updatedText ? `<span class="quota-updated-time">${updatedText}</span>` : ''}
                         `;
-                    } else {
-                        quotaLine.innerHTML = '';
                     }
+                } else if (quotaLine) {
+                    quotaLine.remove();
                 }
 
                 // 更新token状态
@@ -2531,52 +2863,14 @@
             }
 
             const tokens = account.codexTokens;
-            const now = Math.floor(Date.now() / 1000);
-
-            // 如果已失效，对每个窗口独立判断是否已过重置时间
-            if (tokens.status === 'expired' && tokens.quota) {
-                const hourlyReset = tokens.quota.hourly_reset_time || 0;
-                const weeklyReset = tokens.quota.weekly_reset_time || 0;
-
-                const hourlyHasReset = now > hourlyReset;
-                const weeklyHasReset = now > weeklyReset;
-
-                const hourlyPct = hourlyHasReset ? 100 : (tokens.quota.hourly_percentage || 0);
-                const weeklyPct = weeklyHasReset ? 100 : (tokens.quota.weekly_percentage || 0);
-
-                return {
-                    hourly: {
-                        text: `5h: ${Math.round(hourlyPct)}%`,
-                        color: getQuotaColor(hourlyPct),
-                        resetText: hourlyHasReset ? ' (已重置)' : getResetText(hourlyReset)
-                    },
-                    weekly: {
-                        text: `周: ${Math.round(weeklyPct)}%`,
-                        color: getQuotaColor(weeklyPct),
-                        resetText: weeklyHasReset ? ' (已重置)' : getResetText(weeklyReset)
-                    },
-                    status: 'expired'
-                };
-            }
 
             // 显示实际额度（已授权）
             if (tokens.quota) {
-                const hourlyPct = tokens.quota.hourly_percentage || 0;
-                const weeklyPct = tokens.quota.weekly_percentage || 0;
-                const hourlyReset = tokens.quota.hourly_reset_time || 0;
-                const weeklyReset = tokens.quota.weekly_reset_time || 0;
+                const windows = getQuotaDisplayWindows(tokens.quota, tokens.status);
+                if (windows.length === 0) return null;
 
                 return {
-                    hourly: {
-                        text: `5h: ${Math.round(hourlyPct)}%`,
-                        color: getQuotaColor(hourlyPct),
-                        resetText: getResetText(hourlyReset)
-                    },
-                    weekly: {
-                        text: `周: ${Math.round(weeklyPct)}%`,
-                        color: getQuotaColor(weeklyPct),
-                        resetText: getResetText(weeklyReset)
-                    },
+                    windows,
                     status: tokens.status
                 };
             }
@@ -2665,34 +2959,6 @@
 
             if (!choice) return;
 
-            if (choice === 'upload') {
-                // 上传到 Cockpit
-                try {
-                    const exportData = accounts.map(a => ({
-                        email: a.email,
-                        account_id: resolveAccountIdFromAccount(a) || null,
-                        user_id: resolveUserIdFromAccount(a) || null,
-                        organization_id: resolveOrganizationIdFromAccount(a) || null,
-                        tokens: {
-                            id_token: a.codexTokens.id_token,
-                            access_token: a.codexTokens.access_token,
-                            refresh_token: a.codexTokens.refresh_token
-                        },
-                        authorized_at: a.codexTokens.authorized_at,
-                        status: a.codexTokens.status || 'authorized',
-                        quota: a.codexTokens.quota || null,
-                        quota_updated_at: a.codexTokens.quota_updated_at || null,
-                        note: a.note || '',
-                        exported_at: new Date().toISOString()
-                    }));
-                    await this.uploadTokenToCockpit(exportData);
-                    this.showCustomAlert('上传成功', `已将 ${accounts.length} 个账户的Token上传到Cockpit！`, 'success');
-                } catch (error) {
-                    this.showCustomAlert('上传失败', error.message, 'error');
-                }
-                return;
-            }
-
             const { action, format } = choice;
             const jsonStr = formatExportData(accounts, format);
             const formatLabels = { cockpit_tools: 'Cockpit Tools', sub2api: 'sub2api', cpa: 'cpa' };
@@ -2759,7 +3025,6 @@
                     <div class="modal-buttons" style="display: flex; gap: 10px; justify-content: center;">
                         <button class="modal-btn" id="copy-btn" style="background: #10b981; color: white; flex: 1;">复制</button>
                         <button class="modal-btn" id="download-btn" style="background: #3b82f6; color: white; flex: 1;">下载</button>
-                        ${ENABLE_UPLOAD ? '<button class="modal-btn" id="upload-btn" style="background: #8b5cf6; color: white; flex: 1;">上传</button>' : ''}
                     </div>
                     <div class="modal-buttons" style="margin-top: 10px;">
                         <button class="modal-btn modal-btn-cancel" id="cancel-btn" style="width: 100%;">取消</button>
@@ -2806,14 +3071,6 @@
                     cleanup();
                     resolve({ action: 'download', format });
                 };
-
-                if (ENABLE_UPLOAD) {
-                    const uploadBtn = dialog.querySelector('#upload-btn');
-                    uploadBtn.onclick = () => {
-                        cleanup();
-                        resolve('upload');
-                    };
-                }
 
                 cancelBtn.onclick = () => {
                     cleanup();
@@ -2883,52 +3140,14 @@
                 }
 
                 const tokens = account.codexTokens;
-                const now = Math.floor(Date.now() / 1000);
-
-                // 如果已失效，对每个窗口独立判断是否已过重置时间
-                if (tokens.status === 'expired' && tokens.quota) {
-                    const hourlyReset = tokens.quota.hourly_reset_time || 0;
-                    const weeklyReset = tokens.quota.weekly_reset_time || 0;
-
-                    const hourlyHasReset = now > hourlyReset;
-                    const weeklyHasReset = now > weeklyReset;
-
-                    const hourlyPct = hourlyHasReset ? 100 : (tokens.quota.hourly_percentage || 0);
-                    const weeklyPct = weeklyHasReset ? 100 : (tokens.quota.weekly_percentage || 0);
-
-                    return {
-                        hourly: {
-                            text: `5h: ${Math.round(hourlyPct)}%`,
-                            color: getQuotaColor(hourlyPct),
-                            resetText: hourlyHasReset ? ' (已重置)' : getResetText(hourlyReset)
-                        },
-                        weekly: {
-                            text: `周: ${Math.round(weeklyPct)}%`,
-                            color: getQuotaColor(weeklyPct),
-                            resetText: weeklyHasReset ? ' (已重置)' : getResetText(weeklyReset)
-                        },
-                        status: 'expired'
-                    };
-                }
 
                 // 显示实际额度（已授权）
                 if (tokens.quota) {
-                    const hourlyPct = tokens.quota.hourly_percentage || 0;
-                    const weeklyPct = tokens.quota.weekly_percentage || 0;
-                    const hourlyReset = tokens.quota.hourly_reset_time || 0;
-                    const weeklyReset = tokens.quota.weekly_reset_time || 0;
+                    const windows = getQuotaDisplayWindows(tokens.quota, tokens.status);
+                    if (windows.length === 0) return null;
 
                     return {
-                        hourly: {
-                            text: `5h: ${Math.round(hourlyPct)}%`,
-                            color: getQuotaColor(hourlyPct),
-                            resetText: getResetText(hourlyReset)
-                        },
-                        weekly: {
-                            text: `周: ${Math.round(weeklyPct)}%`,
-                            color: getQuotaColor(weeklyPct),
-                            resetText: getResetText(weeklyReset)
-                        },
+                        windows,
                         status: tokens.status
                     };
                 }
@@ -2976,8 +3195,7 @@
                                         ${isRecentlyRemoved ? `<span style="color: #f59e0b; background: #fef3c7;">刚移出</span>` : ''}
                                     </div>
                                     ${quotaDisplay ? `<div class="email-quota-line">
-                                        ${quotaDisplay.hourly ? `<span style="color: ${quotaDisplay.hourly.color};">${quotaDisplay.hourly.text}${quotaDisplay.hourly.resetText}</span>` : ''}
-                                        ${quotaDisplay.weekly ? `<span style="color: ${quotaDisplay.weekly.color};">${quotaDisplay.weekly.text}${quotaDisplay.weekly.resetText}</span>` : ''}
+                                        ${renderQuotaDisplay(quotaDisplay)}
                                         ${quotaUpdatedText ? `<span class="quota-updated-time">${quotaUpdatedText}</span>` : ''}
                                     </div>` : ''}
                                 </div>

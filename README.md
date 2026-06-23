@@ -1,6 +1,6 @@
 # GPTeam - ChatGPT Team 管理增强工具
 
-![Version](https://img.shields.io/badge/version-5.3.1-blue.svg)
+![Version](https://img.shields.io/badge/version-5.4.1-blue.svg)
 ![Chrome Extension](https://img.shields.io/badge/Chrome%20Extension-recommended-brightgreen.svg)
 ![Tampermonkey](https://img.shields.io/badge/Tampermonkey-compatible-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
@@ -24,6 +24,7 @@
 
 ### 2. 👥 成员管理
 - **批量添加**: 支持多行、逗号、分号分隔的批量邮箱导入
+- **Token 导入**: 支持导入多账户 Token JSON
 - **快速邀请**: 一键复制邮箱并自动填充邀请表单
 - **移出成员**: 自动化移出流程（保护所有者账户）
 - **状态同步**: 自动检测和同步成员加入状态
@@ -31,7 +32,7 @@
 - **角色识别**: 自动识别所有者和成员角色
 
 ### 3. 📊 额度查询与监控
-- **实时额度**: 查询 ChatGPT 使用额度（5小时窗口 + 周窗口）
+- **实时额度**: 查询 ChatGPT 使用额度窗口（支持 5 小时、周、月等窗口）
 - **智能刷新**: 自动刷新超过 2 分钟未更新的额度
 - **可视化显示**: 颜色编码显示额度状态（绿/黄/红）
 - **重置倒计时**: 显示额度重置剩余时间
@@ -87,6 +88,13 @@
 2. 输入邮箱（支持单个或多个，多个用换行/逗号/分号分隔）
 3. 点击确定
 
+#### 导入 Token
+1. 点击面板上的 **"添加"** 按钮
+2. 粘贴 Token JSON
+3. 点击确定
+
+支持导入本工具导出的 Cockpit/cpa/sub2api 格式，也支持包含 `access_token`、`refresh_token`、`id_token`、`email` 的单账户或多账户 JSON。已存在邮箱会更新 Token，新邮箱会新增为待加入且已授权账户。
+
 #### 邀请成员
 1. 找到待邀请的邮箱
 2. 点击 **"邀请"** 按钮
@@ -119,8 +127,8 @@
 - **今日已用**: 今日已使用过 ChatGPT 席位的账户数
 
 ### 额度显示
-- **5h**: 5 小时滚动窗口的剩余额度百分比
-- **周**: 周滚动窗口的剩余额度百分比
+- **额度**: 每个真实返回的额度窗口剩余百分比
+- **重置倒计时**: 每个额度窗口的剩余重置时间
 - 颜色含义：
   - 🟢 绿色：> 70%
   - 🟡 黄色：30% - 70%
@@ -159,10 +167,15 @@
     authorized_at: "2024-01-01T...",
     status: "authorized",               // authorized/expired
     quota: {                            // 额度信息
-      hourly_percentage: 85.5,          // 5小时剩余百分比
-      weekly_percentage: 92.3,          // 周剩余百分比
-      hourly_reset_time: 1234567890,    // 5小时重置时间戳
-      weekly_reset_time: 1234567890     // 周重置时间戳
+      windows: [                        // 实际返回的额度窗口
+        {
+          percentage: 85.5,             // 剩余额度百分比
+          reset_time: 1234567890,       // 重置时间戳
+          limit_window_seconds: 18000   // 窗口长度
+        }
+      ],
+      hourly_percentage: 85.5,          // 兼容旧字段：第一个窗口剩余百分比
+      hourly_reset_time: 1234567890     // 兼容旧字段：第一个窗口重置时间戳
     },
     quota_updated_at: "2024-01-01T..."  // 额度更新时间
   }
@@ -173,7 +186,7 @@
 
 ### 数据安全
 - 所有数据存储在浏览器本地（插件版使用 `chrome.storage.local`，油猴版使用 Tampermonkey 存储）
-- Token 默认保存在本地；如启用 Cockpit 上传功能，会上传到本机 `http://localhost:19315`
+- Token 默认保存在本地；插件版会在授权成功或导入 Token JSON 后尝试上报到 `http://localhost:19315`，服务未启动不影响使用
 - 支持邮箱匹配验证，防止授权错误账户
 
 ### 使用建议

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GPTeam",
-  "version": "5.3.1",
+  "version": "5.4.1",
   "description": "ChatGPT Team members panel with Codex OAuth token management.",
   "permissions": [
     "storage",

@@ -37,12 +37,76 @@ function resetText(resetTime) {
   const now = Math.floor(Date.now() / 1000);
   if (resetTime > now) {
     const diff = resetTime - now;
-    const hours = Math.floor(diff / 3600);
+    const days = Math.floor(diff / 86400);
+    const hours = Math.floor((diff % 86400) / 3600);
     const minutes = Math.floor((diff % 3600) / 60);
+    if (days > 0) {
+      return ` (${days}天${hours}h)`;
+    }
     return ` (${hours}h${minutes}m)`;
   }
   if (resetTime > 0) return ' (已重置)';
   return '';
+}
+
+function normalizeQuotaWindow(windowData) {
+  if (!windowData || typeof windowData !== 'object' || Object.keys(windowData).length === 0) {
+    return null;
+  }
+
+  const storedPct = Number(windowData.percentage);
+  const usedPct = Number(windowData.used_percent);
+  const percentage = Number.isFinite(storedPct)
+    ? Math.max(0, Math.min(100, storedPct))
+    : Number.isFinite(usedPct)
+      ? Math.max(0, Math.min(100, 100 - usedPct))
+      : 100;
+
+  return {
+    percentage,
+    reset_time: windowData.reset_time || windowData.reset_at || null
+  };
+}
+
+function hasLegacyQuotaWindow(quota, percentageKey, resetKey, rawWindowKey) {
+  if (quota[percentageKey] == null && quota[resetKey] == null) return false;
+  const rawRateLimit = quota.raw_data && quota.raw_data.rate_limit;
+  if (rawRateLimit && rawRateLimit[rawWindowKey] == null) return false;
+  return true;
+}
+
+function quotaWindows(quota) {
+  if (!quota) return [];
+
+  if (Array.isArray(quota.windows) && quota.windows.length > 0) {
+    return quota.windows
+      .map((windowData) => normalizeQuotaWindow(windowData))
+      .filter(Boolean);
+  }
+
+  const windows = [];
+  if (hasLegacyQuotaWindow(quota, 'hourly_percentage', 'hourly_reset_time', 'primary_window')) {
+    windows.push({
+      percentage: quota.hourly_percentage || 0,
+      reset_time: quota.hourly_reset_time || null
+    });
+  }
+  if (hasLegacyQuotaWindow(quota, 'weekly_percentage', 'weekly_reset_time', 'secondary_window')) {
+    windows.push({
+      percentage: quota.weekly_percentage || 0,
+      reset_time: quota.weekly_reset_time || null
+    });
+  }
+  return windows;
+}
+
+function quotaPills(quota) {
+  return quotaWindows(quota)
+    .map((windowData) => {
+      const percentage = Number(windowData.percentage) || 0;
+      return `<span class="pill" style="color:${quotaColor(percentage)};">${Math.round(percentage)}%${resetText(windowData.reset_time || 0)}</span>`;
+    })
+    .join('');
 }
 
 function quotaUpdatedText(updatedAt) {
@@ -103,8 +167,7 @@ function render(accounts) {
     const hasToken = account.codexTokens?.access_token;
     const tokenStatus = account.codexTokens?.status;
     const quota = account.codexTokens?.quota;
-    const hourly = quota ? Math.round(quota.hourly_percentage || 0) : null;
-    const weekly = quota ? Math.round(quota.weekly_percentage || 0) : null;
+    const quotaHtml = quota ? quotaPills(quota) : '';
     const updatedText = quotaUpdatedText(account.codexTokens?.quota_updated_at);
 
     return `
@@ -117,9 +180,8 @@ function render(accounts) {
           ${hasToken && tokenStatus === 'authorized' ? '<span class="pill" style="color:#10b981;">已授权</span>' : ''}
           ${hasToken && tokenStatus === 'expired' ? '<span class="pill" style="color:#ef4444;">已失效</span>' : ''}
         </div>
-        ${quota ? `<div class="quota">
-          <span class="pill" style="color:${quotaColor(hourly)};">5h: ${hourly}%${resetText(quota.hourly_reset_time || 0)}</span>
-          <span class="pill" style="color:${quotaColor(weekly)};">周: ${weekly}%${resetText(quota.weekly_reset_time || 0)}</span>
+        ${quotaHtml ? `<div class="quota">
+          ${quotaHtml}
           ${updatedText ? `<span class="pill quota-updated">${escapeHtml(updatedText)}</span>` : ''}
         </div>` : ''}
       </article>

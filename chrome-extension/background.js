@@ -162,19 +162,52 @@ async function saveAccounts(accounts) {
   });
 }
 
-function parseQuotaResponse(data) {
-  const rateLimit = data.rate_limit || {};
-  const primaryWindow = rateLimit.primary_window || {};
-  const secondaryWindow = rateLimit.secondary_window || {};
+function collectRateLimitWindows(rateLimit) {
+  if (!rateLimit || typeof rateLimit !== 'object') return [];
 
-  const hourlyUsedPct = primaryWindow.used_percent || 0;
-  const weeklyUsedPct = secondaryWindow.used_percent || 0;
+  const preferredKeys = ['primary_window', 'secondary_window'];
+  const extraKeys = Object.keys(rateLimit)
+    .filter((key) => key.endsWith('_window') && !preferredKeys.includes(key));
+
+  return [...preferredKeys, ...extraKeys]
+    .map((key) => parseQuotaWindow(rateLimit[key]))
+    .filter(Boolean);
+}
+
+function parseQuotaWindow(windowData) {
+  if (!windowData || typeof windowData !== 'object' || Object.keys(windowData).length === 0) {
+    return null;
+  }
+
+  const storedPct = Number(windowData.percentage);
+  const usedPct = Number(windowData.used_percent);
+  const remainingPct = Number.isFinite(storedPct)
+    ? Math.max(0, Math.min(100, storedPct))
+    : Number.isFinite(usedPct)
+      ? Math.max(0, Math.min(100, 100 - usedPct))
+      : 100;
 
   return {
-    hourly_percentage: Math.max(0, 100 - hourlyUsedPct),
-    hourly_reset_time: primaryWindow.reset_at || null,
-    weekly_percentage: Math.max(0, 100 - weeklyUsedPct),
-    weekly_reset_time: secondaryWindow.reset_at || null,
+    percentage: remainingPct,
+    reset_time: windowData.reset_time || windowData.reset_at || null,
+    limit_window_seconds: windowData.limit_window_seconds || null,
+    reset_after_seconds: windowData.reset_after_seconds || null
+  };
+}
+
+function parseQuotaResponse(data) {
+  const rateLimit = data.rate_limit || {};
+  const windows = collectRateLimitWindows(rateLimit);
+  const firstWindow = windows[0] || null;
+  const secondWindow = windows[1] || null;
+
+  return {
+    windows,
+    // Keep legacy fields so old exports and saved data readers keep working.
+    hourly_percentage: firstWindow ? firstWindow.percentage : null,
+    hourly_reset_time: firstWindow ? firstWindow.reset_time : null,
+    weekly_percentage: secondWindow ? secondWindow.percentage : null,
+    weekly_reset_time: secondWindow ? secondWindow.reset_time : null,
     raw_data: data
   };
 }
