@@ -7,7 +7,7 @@
 
 一个功能强大的 ChatGPT Team 管理增强工具，用于增强成员管理、OAuth 授权、Token 管理和额度查询功能。
 
-推荐使用 **Chrome 插件版**：它比油猴版自动化程度更高，可以自动监听 `localhost:1455` OAuth 回调并完成 Token 交换，不需要手动复制粘贴回调 URL。
+推荐使用 **Chrome 插件版**：它比油猴版自动化程度更高，可以自动监听 `localhost:1455` OAuth 回调并完成 Token 交换；如果自动监听未生效，也支持在等待界面手动粘贴回调 URL。
 
 ## 📸 界面预览
 
@@ -68,7 +68,7 @@
 插件版额外能力：
 - 自动打开 OAuth 小窗口
 - 自动监听 `http://localhost:1455/auth/callback` 回调
-- 自动完成 Token 交换，无需复制粘贴 URL
+- 自动完成 Token 交换，并支持手动粘贴回调 URL 作为兜底
 - 插件 popup 提供只读账号面板，便于快速查看状态
 
 ### 兼容方式：Tampermonkey 脚本
@@ -109,7 +109,8 @@
 1. 点击邮箱旁的 **"授权"** 按钮
 2. 在弹出的授权窗口中登录对应账户并完成授权
 3. Chrome 插件版会自动监听 `localhost:1455` 回调并完成 Token 交换
-4. Tampermonkey 版需要手动复制浏览器地址栏的完整回调 URL 并粘贴到脚本弹窗中
+4. 如果自动监听未生效，可以在等待界面点击“手动粘贴回调 URL”完成授权
+5. Tampermonkey 版需要手动复制浏览器地址栏的完整回调 URL 并粘贴到脚本弹窗中
 
 #### 查询额度
 - **单个刷新**: 授权后自动查询
@@ -147,7 +148,7 @@
 - **Chrome Extension MV3**: 推荐版本使用 background service worker 监听 OAuth 回调
 - **chrome.storage.local / GM_setValue**: 持久化数据存储
 - **跨域请求代理**: 插件版由 background 发起请求，油猴版使用 GM_xmlhttpRequest
-- **自动回调处理**: 插件版自动捕获 `localhost:1455` 回调；油猴版保留手动回调输入
+- **自动回调处理**: 插件版自动捕获 `localhost:1455` 回调，并提供手动回调输入兜底；油猴版保留手动回调输入
 
 ### 数据结构
 ```javascript

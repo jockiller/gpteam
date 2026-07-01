@@ -2271,8 +2271,8 @@
                 const confirmed = await this.showCustomConfirm(
                     '即将为以下邮箱进行 OAuth 授权',
                     `邮箱：${email}\n\n` +
-                    `授权完成后，插件会自动监听 localhost:1455 回调并交换 Token。\n` +
-                    `无需手动复制粘贴回调 URL。`
+                    `授权完成后，插件会优先自动监听 localhost:1455 回调并交换 Token。\n` +
+                    `如果自动监听未生效，也可以在等待界面手动粘贴回调 URL。`
                 );
 
                 if (!confirmed) {
@@ -2313,38 +2313,95 @@
 
                 const authUrl = `${codexOAuth.AUTH_ENDPOINT}?${params.toString()}`;
 
-                const loadingOverlay = this.showLoading('等待授权完成...');
+                const loadingOverlay = this.showLoading('等待授权完成...', {
+                    hint: '插件会优先自动监听 localhost:1455 回调；如果没有自动捕获，可以手动粘贴完整回调 URL。',
+                    actionText: '手动粘贴回调 URL'
+                });
                 let result;
                 try {
                     result = await new Promise((resolve, reject) => {
+                        let settled = false;
                         const timeoutId = setTimeout(() => {
-                            chrome.runtime.onMessage.removeListener(listener);
-                            reject(new Error('授权等待超时，请重新授权'));
+                            finish(() => reject(new Error('授权等待超时，请重新授权')));
                         }, 5 * 60 * 1000);
+
+                        const finish = (callback) => {
+                            if (settled) return;
+                            settled = true;
+                            clearTimeout(timeoutId);
+                            chrome.runtime.onMessage.removeListener(listener);
+                            callback();
+                        };
 
                         const listener = (message) => {
                             if (!message || message.type !== 'gpteam_oauth_result') return;
                             if (message.state !== state) return;
 
-                            clearTimeout(timeoutId);
-                            chrome.runtime.onMessage.removeListener(listener);
-
-                            if (!message.ok) {
-                                reject(new Error(message.error || '授权失败'));
-                                return;
-                            }
-                            resolve(message.result);
+                            finish(() => {
+                                if (!message.ok) {
+                                    reject(new Error(message.error || '授权失败'));
+                                    return;
+                                }
+                                resolve(message.result);
+                            });
                         };
 
                         chrome.runtime.onMessage.addListener(listener);
+                        const manualBtn = loadingOverlay?.querySelector('#oauth-manual-btn');
+                        if (manualBtn) {
+                            manualBtn.onclick = async () => {
+                                if (settled) return;
+
+                                manualBtn.disabled = true;
+                                manualBtn.style.opacity = '0.7';
+                                manualBtn.textContent = '等待输入...';
+
+                                try {
+                                    const callbackUrl = await this.showCustomPrompt(
+                                        '粘贴回调 URL',
+                                        '如果自动监听未生效，请复制浏览器地址栏的完整 URL 并粘贴到下方：\n\n（格式：http://localhost:1455/auth/callback?code=...&state=...）',
+                                        ''
+                                    );
+
+                                    if (!callbackUrl || settled) {
+                                        return;
+                                    }
+
+                                    const { code } = this.parseOAuthCallbackUrl(
+                                        callbackUrl,
+                                        state,
+                                        codexOAuth.REDIRECT_URI
+                                    );
+                                    const manualResult = await codexOAuth.exchangeToken(code, codeVerifier, email);
+
+                                    await chrome.runtime.sendMessage({
+                                        type: 'gpteam_cancel_oauth',
+                                        state
+                                    }).catch((error) => {
+                                        console.warn('[GPTeam OAuth] 清理后台 OAuth 会话失败:', error);
+                                    });
+
+                                    finish(() => resolve(manualResult));
+                                } catch (error) {
+                                    if (!settled) {
+                                        this.showCustomAlert('手动回填失败', error.message, 'error');
+                                    }
+                                } finally {
+                                    if (!settled) {
+                                        manualBtn.disabled = false;
+                                        manualBtn.style.opacity = '1';
+                                        manualBtn.textContent = '手动粘贴回调 URL';
+                                    }
+                                }
+                            };
+                        }
+
                         chrome.runtime.sendMessage({
                             type: 'gpteam_start_oauth',
                             session: { email, codeVerifier, state, timestamp: Date.now() },
                             authUrl
                         }).catch((error) => {
-                            clearTimeout(timeoutId);
-                            chrome.runtime.onMessage.removeListener(listener);
-                            reject(error);
+                            finish(() => reject(error));
                         });
                     });
                 } finally {
@@ -2378,6 +2435,33 @@
                 console.error('OAuth 错误:', error);
                 this.showCustomAlert(`OAuth 错误：\n\n${error.message}`, 'error');
             }
+        }
+
+        parseOAuthCallbackUrl(callbackUrl, expectedState, expectedRedirectUri) {
+            let url;
+            try {
+                url = new URL(callbackUrl);
+            } catch {
+                throw new Error('回调 URL 格式错误');
+            }
+
+            const redirectUrl = new URL(expectedRedirectUri);
+            if (url.origin !== redirectUrl.origin || url.pathname !== redirectUrl.pathname) {
+                throw new Error(`回调地址不匹配，请粘贴 ${expectedRedirectUri} 开头的完整 URL`);
+            }
+
+            const code = url.searchParams.get('code');
+            const receivedState = url.searchParams.get('state');
+
+            if (!code || !receivedState) {
+                throw new Error('回调 URL 缺少 code 或 state 参数');
+            }
+
+            if (receivedState !== expectedState) {
+                throw new Error('State 验证失败，请确认粘贴的是本次授权的回调 URL');
+            }
+
+            return { code, state: receivedState };
         }
 
         // 自定义确认弹窗
@@ -2525,7 +2609,13 @@
         }
 
         // 显示加载遮罩
-        showLoading(message) {
+        showLoading(message, options = {}) {
+            const hintHtml = options.hint
+                ? `<div style="font-size: 13px; line-height: 1.6; margin-top: 12px; max-width: 420px; color: rgba(255, 255, 255, 0.9); white-space: pre-wrap;">${options.hint}</div>`
+                : '';
+            const actionHtml = options.actionText
+                ? `<button id="oauth-manual-btn" style="margin-top: 18px; padding: 10px 16px; border: 1px solid rgba(255, 255, 255, 0.4); background: rgba(255, 255, 255, 0.14); color: white; border-radius: 999px; font-size: 13px; font-weight: 600; cursor: pointer;">${options.actionText}</button>`
+                : '';
             const overlay = document.createElement('div');
             overlay.id = 'oauth-loading';
             overlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.8); display: flex; align-items: center; justify-content: center; z-index: 9999999;';
@@ -2534,6 +2624,8 @@
                 <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 60px; border-radius: 16px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); text-align: center; color: white; font-family: -apple-system, BlinkMacSystemFont, sans-serif;">
                     <div style="font-size: 64px; margin-bottom: 20px; animation: spin 2s linear infinite;">🔐</div>
                     <div style="font-size: 24px; font-weight: 600;">${message}</div>
+                    ${hintHtml}
+                    ${actionHtml}
                 </div>
                 <style>
                     @keyframes spin {

@@ -382,6 +382,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'gpteam_cancel_oauth') {
+    const state = message.state;
+    if (!state) {
+      sendResponse({ ok: false, error: 'missing_state' });
+      return false;
+    }
+
+    getOAuthSession(state)
+      .then((session) => {
+        if (session?.authTabId) {
+          closeTab(session.authTabId);
+        }
+        oauthSessions.delete(state);
+        chrome.storage.local.remove('codex_oauth_session');
+        sendResponse({ ok: true });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: error?.message || String(error)
+        });
+      });
+    return true;
+  }
+
   if (message?.type === 'gpteam_refresh_quotas') {
     refreshQuotas({
       force: Boolean(message.force),
